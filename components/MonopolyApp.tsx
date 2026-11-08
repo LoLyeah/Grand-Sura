@@ -1,0 +1,3726 @@
+'use client';
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Markdown from 'react-markdown';
+import {
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Copy,
+  Check,
+  Dices,
+  Gavel,
+  Globe,
+  Layers,
+  Mic,
+  TrendingDown,
+  TrendingUp,
+  Users,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react';
+import MonopolyBoard3D, { CameraPreset } from './three/MonopolyBoard3D';
+import MonopolyBoard2D from './MonopolyBoard2D';
+import LiveVoicePanel from './LiveVoicePanel';
+import {
+  BOARD_SIZE_CONFIGS,
+  BoardSizeId,
+  COLOR_GROUP_NAMES,
+  CONTENDER_NAMES,
+  getBoardTiles,
+  GLOBAL_EVENTS,
+  HOST_VOICES,
+  HostConfig,
+  HostGender,
+  HostVoiceName,
+  PERSONALITY_PRESETS,
+  PersonalityPresetId,
+  PLAYER_PALETTE,
+  TOKEN_ARCHETYPES,
+  TokenArchetype,
+} from '@/lib/monopoly-data';
+import {
+  applyGameAction,
+  canBuildHouseOnTile,
+  computeNextBotAction,
+  createInitialGameRoom,
+  DEFAULT_TURN_TIME_LIMIT_SECONDS,
+  GameMode,
+  GameRoomState,
+  getEffectiveHouseCost,
+  getEffectivePropertyPrice,
+  PlayerState,
+} from '@/lib/monopoly-engine';
+import { soundFX } from '@/lib/sound-fx';
+
+type ActiveModalTab =
+  | 'NONE'
+  | 'LOBBY'
+  | 'DEED'
+  | 'PORTFOLIO'
+  | 'TRADE'
+  | 'EVENTS'
+  | 'HOST';
+
+const DEFAULT_HOST_CONFIG: HostConfig = {
+  enabled: true,
+  gender: 'FEMALE',
+  voiceName: 'Kore',
+  personalityPreset: 'WITTY_HOST',
+  customPersonalityPrompt: '',
+  autoSpeakEvents: true,
+};
+
+function buildDraftPlayersForCount(
+  count: number,
+  startingCash = 1500
+): PlayerState[] {
+  const clamped = Math.max(2, Math.min(16, count));
+  const list: PlayerState[] = [];
+  for (let i = 0; i < clamped; i++) {
+    const arch = TOKEN_ARCHETYPES[i % TOKEN_ARCHETYPES.length];
+    const color = PLAYER_PALETTE[i % PLAYER_PALETTE.length];
+    list.push({
+      id: `p-${i + 1}`,
+      name: CONTENDER_NAMES[i] || `Contender ${i + 1}`,
+      isBot: i > 0,
+      token: arch.id,
+      color,
+      cash: startingCash,
+      position: 0,
+      inJail: false,
+      jailTurns: 0,
+      getOutOfJailCards: 0,
+      bankrupt: false,
+      connected: true,
+    });
+  }
+  return list;
+}
+
+const DEFAULT_LOCAL_PLAYERS: PlayerState[] = buildDraftPlayersForCount(4, 1500);
+
+export default function MonopolyApp() {
+  // App Lifecycle Phase: Always open on 'START_MENU' first so the game never starts automatically!
+  const [appPhase, setAppPhase] = useState<
+    'START_MENU' | 'LOBBY_SETUP' | 'IN_GAME'
+  >('START_MENU');
+
+  const [gameState, setGameState] = useState<GameRoomState>(() =>
+    createInitialGameRoom(
+      'LOCAL1',
+      'LOCAL',
+      DEFAULT_LOCAL_PLAYERS,
+      DEFAULT_HOST_CONFIG,
+      DEFAULT_TURN_TIME_LIMIT_SECONDS,
+      'CLASSIC'
+    )
+  );
+
+  // Board Presentation Mode: '3D' (WebGL) or '2D' (High-Contrast Easy-Read Tabletop)
+  const [viewMode, setViewMode] = useState<'3D' | '2D'>('3D');
+
+  // Lobby Setup State
+  const [setupMode, setSetupMode] = useState<GameMode>('LOCAL');
+  const [draftBoardSize, setDraftBoardSize] = useState<BoardSizeId>('CLASSIC');
+  const [draftTurnLimit, setDraftTurnLimit] = useState<number>(
+    DEFAULT_TURN_TIME_LIMIT_SECONDS
+  );
+  const [onlineAction, setOnlineAction] = useState<'CREATE' | 'JOIN'>('CREATE');
+  const [joinRoomCodeInput, setJoinRoomCodeInput] = useState('');
+  const [onlinePlayerName, setOnlinePlayerName] = useState('Aurelia Sterling');
+  const [onlinePlayerToken, setOnlinePlayerToken] =
+    useState<TokenArchetype>('GRAND_TOURER');
+  const [onlineBotCount, setOnlineBotCount] = useState(3);
+  const [localDraftPlayers, setLocalDraftPlayers] = useState<PlayerState[]>(
+    DEFAULT_LOCAL_PLAYERS
+  );
+  const [roomError, setRoomError] = useState<string | null>(null);
+  const [localPlayerId, setLocalPlayerId] = useState<string>('p-1');
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  // UI & Viewport Controls
+  const [dockCollapsed, setDockCollapsed] = useState(false);
+  const [activeModal, setActiveModal] = useState<ActiveModalTab>('NONE');
+  const [selectedTileIndex, setSelectedTileIndex] = useState<number>(1);
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
+  const [diceRollTrigger, setDiceRollTrigger] = useState(0);
+  const [sfxMuted, setSfxMuted] = useState(false);
+
+  // Turn-Time Limit Countdown Clock Tick
+  const [clockTick, setClockTick] = useState<number>(() => Date.now());
+  const timeoutDispatchedKeyRef = useRef<string | null>(null);
+
+  // AI Host Commentary & Live Voice State
+  const [hostTranscript, setHostTranscript] = useState<string>(
+    'Welcome to Grand Estates 3D! Switch between 3D View, Top-Down, or 2D Easy-Read Board anytime.'
+  );
+  const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
+  const [showLiveVoice, setShowLiveVoice] = useState(false);
+  const lastSpokenHeadlineRef = useRef<string | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Google Search Landmark Grounding State
+  const [landmarkIntelCache, setLandmarkIntelCache] = useState<
+    Record<
+      string,
+      { text: string; sources: { uri: string; title: string }[] }
+    >
+  >({});
+  const [loadingIntelKey, setLoadingIntelKey] = useState<string | null>(null);
+  const [intelError, setIntelError] = useState<string | null>(null);
+
+  // Trade Form State
+  const [tradeTargetId, setTradeTargetId] = useState<string>('p-2');
+  const [tradeOfferCash, setTradeOfferCash] = useState<number>(0);
+  const [tradeRequestCash, setTradeRequestCash] = useState<number>(0);
+  const [tradeOfferProps, setTradeOfferProps] = useState<number[]>([]);
+  const [tradeRequestProps, setTradeRequestProps] = useState<number[]>([]);
+
+  // WebSocket reference for Online Multiplayer Rooms
+  const gameWsRef = useRef<WebSocket | null>(null);
+
+  // Active board tiles for the current boardSize (MINI=24, CLASSIC=40, MEGA=52)
+  const activeTiles = useMemo(
+    () => getBoardTiles(gameState.boardSize),
+    [gameState.boardSize]
+  );
+  const activeBoardConfig =
+    BOARD_SIZE_CONFIGS[gameState.boardSize] || BOARD_SIZE_CONFIGS.CLASSIC;
+
+  // Keyboard shortcut 'H' to collapse/expand bottom control dock
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key.toLowerCase() === 'h') {
+        setDockCollapsed((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Build concise board context string for AI Host TTS and Live API
+  const boardContextSummary = useMemo(() => {
+    const cur = gameState.players[gameState.turnIndex];
+    const standings = gameState.players
+      .map((p) => {
+        const deedCount = Object.values(gameState.properties).filter(
+          (pr) => pr.ownerId === p.id
+        ).length;
+        return `${p.name}: $${p.cash} (${deedCount} deeds, at ${
+          activeTiles[p.position]?.shortName || 'GO'
+        }${p.inJail ? ', in Detention' : ''}${p.bankrupt ? ', BANKRUPT' : ''})`;
+      })
+      .join(' | ');
+    const macroText = gameState.activeGlobalEvent
+      ? `Active Global Event: ${gameState.activeGlobalEvent.event.title} (${gameState.activeGlobalEvent.remainingTurns} turns left).`
+      : 'No active temporary market event.';
+    return `Board: ${activeBoardConfig.name} | Current Turn: ${
+      cur?.name || 'None'
+    } | Phase: ${gameState.phase} | Standings: ${standings} | ${macroText}`;
+  }, [gameState, activeTiles, activeBoardConfig.name]);
+
+  // Speak commentary via gemini-3.8-flash-tts
+  const triggerHostCommentary = useCallback(
+    async (eventText: string, directScript?: string) => {
+      if (!gameState.hostConfig.enabled) return;
+      setIsSynthesizingTts(true);
+      try {
+        const res = await fetch('/api/host/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventSummary: eventText,
+            hostConfig: gameState.hostConfig,
+            boardContext: boardContextSummary,
+            directScript,
+          }),
+        });
+        const data = await res.json();
+        if (data.transcript) {
+          setHostTranscript(data.transcript);
+        }
+        if (data.audioBase64 && !sfxMuted) {
+          if (currentAudioRef.current) {
+            currentAudioRef.current.pause();
+          }
+          const audio = new Audio(
+            `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`
+          );
+          currentAudioRef.current = audio;
+          audio.play().catch(() => {});
+        }
+      } catch {
+        // Fallback silently if offline
+      } finally {
+        setIsSynthesizingTts(false);
+      }
+    },
+    [gameState.hostConfig, boardContextSummary, sfxMuted]
+  );
+
+  // Watch for important headline game events to narrate automatically when autoSpeakEvents is enabled
+  useEffect(() => {
+    if (appPhase !== 'IN_GAME') return;
+    const headline = gameState.lastHeadlineEvent;
+    if (
+      headline &&
+      headline !== lastSpokenHeadlineRef.current &&
+      gameState.hostConfig.enabled &&
+      gameState.hostConfig.autoSpeakEvents
+    ) {
+      lastSpokenHeadlineRef.current = headline;
+      triggerHostCommentary(headline);
+    }
+  }, [
+    appPhase,
+    gameState.lastHeadlineEvent,
+    gameState.hostConfig.enabled,
+    gameState.hostConfig.autoSpeakEvents,
+    triggerHostCommentary,
+  ]);
+
+  // Dispatch game action (either locally or via authoritative WebSocket server in ONLINE mode)
+  const dispatchAction = useCallback(
+    (action: Parameters<typeof applyGameAction>[1]) => {
+      if (action.type === 'ROLL_DICE') {
+        soundFX.playDiceRoll();
+        setDiceRollTrigger((c) => c + 1);
+      } else if (action.type === 'BUY_PROPERTY') {
+        soundFX.playCashChime();
+      } else if (action.type === 'BUILD_HOUSE') {
+        soundFX.playBuildUpgrade();
+      } else if (
+        action.type === 'AUCTION_BID' ||
+        action.type === 'DECLINE_PROPERTY'
+      ) {
+        soundFX.playGavelStrike();
+      }
+
+      if (
+        gameState.mode === 'ONLINE' &&
+        gameWsRef.current &&
+        gameWsRef.current.readyState === WebSocket.OPEN
+      ) {
+        gameWsRef.current.send(
+          JSON.stringify({
+            type: 'room:action',
+            action,
+          })
+        );
+      } else {
+        setGameState((prev) => applyGameAction(prev, action));
+      }
+    },
+    [gameState.mode]
+  );
+
+  // Turn-Time Limit Visual Countdown & Automatic 'END_TURN' Dispatch on Timeout
+  const remainingSeconds =
+    appPhase === 'IN_GAME' &&
+    gameState.status === 'PLAYING' &&
+    gameState.turnTimeLimitSeconds > 0
+      ? Math.max(
+          0,
+          gameState.turnTimeLimitSeconds -
+            Math.floor(Math.max(0, clockTick - gameState.turnStartedAt) / 1000)
+        )
+      : null;
+
+  useEffect(() => {
+    if (
+      appPhase !== 'IN_GAME' ||
+      gameState.status !== 'PLAYING' ||
+      gameState.turnTimeLimitSeconds <= 0
+    ) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setClockTick(now);
+      const elapsedSeconds = Math.floor(
+        Math.max(0, now - gameState.turnStartedAt) / 1000
+      );
+      const left = Math.max(
+        0,
+        gameState.turnTimeLimitSeconds - elapsedSeconds
+      );
+
+      const turnKey = `${gameState.turnStartedAt}-${gameState.turnIndex}`;
+      if (left <= 0 && timeoutDispatchedKeyRef.current !== turnKey) {
+        timeoutDispatchedKeyRef.current = turnKey;
+        soundFX.playGavelStrike();
+        dispatchAction({ type: 'END_TURN', isTimeout: true });
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [
+    appPhase,
+    gameState.status,
+    gameState.turnTimeLimitSeconds,
+    gameState.turnStartedAt,
+    gameState.turnIndex,
+    dispatchAction,
+  ]);
+
+  // Automatic Bot Turn Execution in LOCAL mode (only when appPhase === 'IN_GAME')
+  useEffect(() => {
+    if (
+      appPhase !== 'IN_GAME' ||
+      gameState.mode !== 'LOCAL' ||
+      gameState.status !== 'PLAYING'
+    )
+      return;
+    const nextBotMove = computeNextBotAction(gameState);
+    if (!nextBotMove) return;
+
+    const timer = setTimeout(() => {
+      dispatchAction(nextBotMove);
+    }, 750);
+
+    return () => clearTimeout(timer);
+  }, [appPhase, gameState, dispatchAction]);
+
+  // Fetch Google Search Grounding Intel for a Landmark Tile
+  const fetchLandmarkIntel = async (tileIdx: number) => {
+    const tile = activeTiles[tileIdx];
+    if (!tile) return;
+    const cacheKey = `${gameState.boardSize}-${tileIdx}`;
+    setLoadingIntelKey(cacheKey);
+    setIntelError(null);
+    try {
+      const res = await fetch('/api/landmark/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tileName: tile.name,
+          city: tile.city,
+          country: tile.country,
+          landmarkQuery: tile.landmarkQuery,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Failed to fetch landmark intel');
+      }
+      setLandmarkIntelCache((prev) => ({
+        ...prev,
+        [cacheKey]: {
+          text: data.text,
+          sources: data.sources || [],
+        },
+      }));
+    } catch (err: unknown) {
+      setIntelError(
+        err instanceof Error ? err.message : 'Unable to fetch live search data'
+      );
+    } finally {
+      setLoadingIntelKey(null);
+    }
+  };
+
+  // Select a Board Size in Lobby and optionally apply its recommended player count
+  const handleSelectDraftBoardSize = (
+    newSize: BoardSizeId,
+    applyRecommendedCount = false
+  ) => {
+    const cfg = BOARD_SIZE_CONFIGS[newSize];
+    setDraftBoardSize(newSize);
+    if (applyRecommendedCount) {
+      setLocalDraftPlayers(
+        buildDraftPlayersForCount(cfg.defaultPlayerCount, cfg.startingCash)
+      );
+      setOnlineBotCount(Math.max(1, cfg.defaultPlayerCount - 1));
+    } else {
+      // Clamp player list to maxAllowedPlayers and update starting cash
+      setLocalDraftPlayers((prev) =>
+        prev
+          .slice(0, cfg.maxAllowedPlayers)
+          .map((p) => ({ ...p, cash: cfg.startingCash }))
+      );
+    }
+  };
+
+  // Start a new Local Match
+  const handleStartLocalMatch = () => {
+    if (gameWsRef.current) {
+      gameWsRef.current.close();
+      gameWsRef.current = null;
+    }
+    const cfg = BOARD_SIZE_CONFIGS[draftBoardSize];
+    const cleanPlayers: PlayerState[] = localDraftPlayers.map((p, idx) => ({
+      ...p,
+      id: `local-${idx + 1}`,
+      cash: cfg.startingCash,
+      position: 0,
+      inJail: false,
+      jailTurns: 0,
+      getOutOfJailCards: 0,
+      bankrupt: false,
+      connected: true,
+    }));
+    const newState = createInitialGameRoom(
+      'LOCAL1',
+      'LOCAL',
+      cleanPlayers,
+      gameState.hostConfig,
+      draftTurnLimit,
+      draftBoardSize
+    );
+    setGameState(newState);
+    setLocalPlayerId(cleanPlayers[0].id);
+    setSelectedTileIndex(1);
+    setActiveModal('NONE');
+    setAppPhase('IN_GAME');
+    soundFX.playCashChime();
+  };
+
+  // Quick-launch a preset board size & recommended player count from Start Menu
+  const handleQuickLaunchPreset = (sizeId: BoardSizeId) => {
+    if (gameWsRef.current) {
+      gameWsRef.current.close();
+      gameWsRef.current = null;
+    }
+    const cfg = BOARD_SIZE_CONFIGS[sizeId];
+    setDraftBoardSize(sizeId);
+    const presetPlayers = buildDraftPlayersForCount(
+      cfg.defaultPlayerCount,
+      cfg.startingCash
+    );
+    setLocalDraftPlayers(presetPlayers);
+    const cleanPlayers: PlayerState[] = presetPlayers.map((p, idx) => ({
+      ...p,
+      id: `local-${idx + 1}`,
+      cash: cfg.startingCash,
+    }));
+    const newState = createInitialGameRoom(
+      'LOCAL1',
+      'LOCAL',
+      cleanPlayers,
+      gameState.hostConfig,
+      draftTurnLimit,
+      sizeId
+    );
+    setGameState(newState);
+    setLocalPlayerId(cleanPlayers[0].id);
+    setSelectedTileIndex(1);
+    setActiveModal('NONE');
+    setAppPhase('IN_GAME');
+    soundFX.playCashChime();
+  };
+
+  // Connect to Online Multiplayer Room (Create or Join)
+  const handleConnectOnlineRoom = () => {
+    setRoomError(null);
+    if (gameWsRef.current) {
+      gameWsRef.current.close();
+      gameWsRef.current = null;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/game`);
+    gameWsRef.current = ws;
+
+    const myId = `online-${Math.random().toString(36).slice(2, 8)}`;
+    const archMeta =
+      TOKEN_ARCHETYPES.find((t) => t.id === onlinePlayerToken) ||
+      TOKEN_ARCHETYPES[0];
+    const cfg = BOARD_SIZE_CONFIGS[draftBoardSize];
+
+    const myPlayer: PlayerState = {
+      id: myId,
+      name: onlinePlayerName.trim() || 'Sovereign Contender',
+      isBot: false,
+      token: onlinePlayerToken,
+      color: archMeta.defaultColor,
+      cash: cfg.startingCash,
+      position: 0,
+      inJail: false,
+      jailTurns: 0,
+      getOutOfJailCards: 0,
+      bankrupt: false,
+      connected: true,
+    };
+
+    ws.onopen = () => {
+      if (onlineAction === 'CREATE') {
+        const bots: PlayerState[] = [];
+        const availableTokens = TOKEN_ARCHETYPES.filter(
+          (t) => t.id !== onlinePlayerToken
+        );
+        const botNames = CONTENDER_NAMES.slice(1);
+        for (let i = 0; i < onlineBotCount; i++) {
+          const bArch = availableTokens[i % availableTokens.length];
+          const bColor = PLAYER_PALETTE[(i + 1) % PLAYER_PALETTE.length];
+          bots.push({
+            id: `bot-${i + 1}-${Date.now()}`,
+            name: botNames[i % botNames.length] || `Bot Contender ${i + 1}`,
+            isBot: true,
+            token: bArch.id,
+            color: bColor,
+            cash: cfg.startingCash,
+            position: 0,
+            inJail: false,
+            jailTurns: 0,
+            getOutOfJailCards: 0,
+            bankrupt: false,
+            connected: true,
+          });
+        }
+        ws.send(
+          JSON.stringify({
+            type: 'room:create',
+            player: myPlayer,
+            bots,
+            hostConfig: gameState.hostConfig,
+            boardSize: draftBoardSize,
+            turnTimeLimitSeconds: draftTurnLimit,
+          })
+        );
+      } else {
+        ws.send(
+          JSON.stringify({
+            type: 'room:join',
+            roomCode: joinRoomCodeInput.trim().toUpperCase(),
+            player: myPlayer,
+          })
+        );
+      }
+    };
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'room:joined') {
+        setLocalPlayerId(msg.playerId);
+        setGameState(msg.state);
+        setSelectedTileIndex(1);
+        setActiveModal('NONE');
+        setAppPhase('IN_GAME');
+        soundFX.playCashChime();
+      } else if (msg.type === 'room:state') {
+        setGameState(msg.state);
+      } else if (msg.type === 'room:error') {
+        setRoomError(msg.message || 'Unable to join room');
+      }
+    };
+
+    ws.onerror = () => {
+      setRoomError('WebSocket connection error. Please try again.');
+    };
+  };
+
+  const currentPlayer =
+    gameState.players[gameState.turnIndex] || gameState.players[0];
+  const currentTile =
+    activeTiles[currentPlayer?.position || 0] || activeTiles[0];
+  const safeSelectedIndex =
+    selectedTileIndex < activeTiles.length ? selectedTileIndex : 0;
+  const selectedTile = activeTiles[safeSelectedIndex] || activeTiles[0];
+  const selectedPropState = gameState.properties[selectedTile.index];
+  const selectedOwner = selectedPropState?.ownerId
+    ? gameState.players.find((p) => p.id === selectedPropState.ownerId)
+    : null;
+  const selectedIntelKey = `${gameState.boardSize}-${selectedTile.index}`;
+
+  const isMyTurn =
+    gameState.mode === 'LOCAL'
+      ? !currentPlayer?.isBot
+      : currentPlayer?.id === localPlayerId;
+
+  const activeControllablePlayer =
+    gameState.mode === 'LOCAL'
+      ? currentPlayer
+      : gameState.players.find((p) => p.id === localPlayerId) || currentPlayer;
+
+  const currentEffectivePrice = getEffectivePropertyPrice(
+    gameState,
+    currentTile.index
+  );
+
+  const selectedEffectivePrice = getEffectivePropertyPrice(
+    gameState,
+    selectedTile.index
+  );
+  const selectedEffectiveHouseCost = getEffectiveHouseCost(
+    gameState,
+    selectedTile.index
+  );
+
+  const timerProgressPct =
+    gameState.turnTimeLimitSeconds > 0 && remainingSeconds !== null
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            (remainingSeconds / gameState.turnTimeLimitSeconds) * 100
+          )
+        )
+      : 100;
+
+  return (
+    <main className="relative w-screen h-screen overflow-hidden bg-[#0F0C0A] select-none">
+      {/* 1A. Full-Bleed 3D WebGL Monopoly Viewport (100vw x 100vh) */}
+      <MonopolyBoard3D
+        gameState={gameState}
+        selectedTileIndex={safeSelectedIndex}
+        onSelectTile={(idx) => {
+          setSelectedTileIndex(idx);
+          setActiveModal('DEED');
+          soundFX.playTokenHop();
+        }}
+        cameraPreset={cameraPreset}
+        onUserOrbitStart={() => setCameraPreset('FREE_ORBIT')}
+        diceRollTrigger={diceRollTrigger}
+      />
+
+      {/* 1B. Crisp 2D Top-Down Easy-Read Tabletop View (When viewMode === '2D') */}
+      {viewMode === '2D' && (
+        <MonopolyBoard2D
+          gameState={gameState}
+          selectedTileIndex={safeSelectedIndex}
+          onSelectTile={(idx, openModal) => {
+            setSelectedTileIndex(idx);
+            if (openModal) {
+              setActiveModal('DEED');
+            }
+            soundFX.playTokenHop();
+          }}
+          onDispatchAction={dispatchAction}
+          isMyTurn={isMyTurn}
+          remainingSeconds={remainingSeconds}
+          onSwitchTo3D={() => setViewMode('3D')}
+        />
+      )}
+
+      {/* 2. Top Bar Contract (Strictly 3 Zones separated by gap-8) */}
+      <header className="relative z-20 flex items-center justify-between gap-8 px-6 py-3 bg-[#14100E]/95 border-b border-[#D4AF37]/25">
+        {/* Zone 1: Single text element wordmark */}
+        <a
+          href="#board"
+          onClick={(e) => {
+            e.preventDefault();
+            setActiveModal('NONE');
+          }}
+          className="text-lg font-bold tracking-tight text-[#FAF6F0] whitespace-nowrap shrink-0"
+          style={{ fontFamily: 'var(--font-fraunces), serif' }}
+        >
+          Grand Estates 3D
+        </a>
+
+        {/* Zone 2: 5 concise single-line text navigation links */}
+        <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-stone-300">
+          <button
+            onClick={() => {
+              setViewMode('3D');
+              setActiveModal('NONE');
+            }}
+            className={`hover:text-[#D4AF37] transition-colors whitespace-nowrap shrink-0 ${
+              viewMode === '3D' && activeModal === 'NONE'
+                ? 'text-[#D4AF37] underline underline-offset-4'
+                : ''
+            }`}
+          >
+            3D Board
+          </button>
+          <button
+            onClick={() => {
+              setViewMode('2D');
+              setActiveModal('NONE');
+            }}
+            className={`hover:text-[#D4AF37] transition-colors whitespace-nowrap shrink-0 ${
+              viewMode === '2D' && activeModal === 'NONE'
+                ? 'text-[#D4AF37] underline underline-offset-4'
+                : ''
+            }`}
+          >
+            2D Board (Easy Read)
+          </button>
+          <button
+            onClick={() =>
+              setActiveModal(activeModal === 'EVENTS' ? 'NONE' : 'EVENTS')
+            }
+            className={`hover:text-[#D4AF37] transition-colors whitespace-nowrap shrink-0 ${
+              activeModal === 'EVENTS'
+                ? 'text-[#D4AF37] underline underline-offset-4'
+                : ''
+            }`}
+          >
+            Macro Events
+          </button>
+          <button
+            onClick={() =>
+              setActiveModal(activeModal === 'PORTFOLIO' ? 'NONE' : 'PORTFOLIO')
+            }
+            className={`hover:text-[#D4AF37] transition-colors whitespace-nowrap shrink-0 ${
+              activeModal === 'PORTFOLIO'
+                ? 'text-[#D4AF37] underline underline-offset-4'
+                : ''
+            }`}
+          >
+            Portfolio
+          </button>
+          <button
+            onClick={() =>
+              setActiveModal(activeModal === 'HOST' ? 'NONE' : 'HOST')
+            }
+            className={`hover:text-[#D4AF37] transition-colors whitespace-nowrap shrink-0 ${
+              activeModal === 'HOST'
+                ? 'text-[#D4AF37] underline underline-offset-4'
+                : ''
+            }`}
+          >
+            AI Host
+          </button>
+        </nav>
+
+        {/* Zone 3: 1 primary action */}
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            onClick={() => {
+              if (appPhase !== 'IN_GAME') {
+                setAppPhase('LOBBY_SETUP');
+              } else {
+                setActiveModal(activeModal === 'LOBBY' ? 'NONE' : 'LOBBY');
+              }
+            }}
+            className="px-4 py-2 text-xs font-semibold text-[#0F0C0A] bg-[#D4AF37] rounded-lg hover:bg-[#e5c247] transition-colors whitespace-nowrap shrink-0"
+          >
+            Board Size & Lobby
+          </button>
+        </div>
+      </header>
+
+      {/* 2B. Dedicated Start Menu & Pre-Game Setup Lobby Overlay (Shown when appPhase !== 'IN_GAME') */}
+      {appPhase !== 'IN_GAME' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
+          {appPhase === 'START_MENU' ? (
+            <div className="w-full max-w-4xl rounded-2xl bg-[#14100E] border-2 border-[#D4AF37]/60 shadow-2xl p-6 md:p-10 text-[#FAF6F0] space-y-6 my-auto">
+              <div className="text-center space-y-2 border-b border-[#D4AF37]/25 pb-6">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#D4AF37]/15 border border-[#D4AF37]/40 text-xs font-bold text-[#D4AF37]">
+                  <span>SOVEREIGN WORLD LANDMARKS · 2 TO 16 PLAYERS</span>
+                </div>
+                <h1
+                  className="text-3xl md:text-5xl font-bold text-[#FAF6F0] tracking-tight"
+                  style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                >
+                  Grand Estates 3D
+                </h1>
+                <p className="text-sm md:text-base text-stone-300 max-w-2xl mx-auto">
+                  Multiplayer 3D & 2D Luxury Landmark Monopoly with five board
+                  scales (24 to 84 spaces for up to 16 players), periodic
+                  macro-economic market events, and an optional AI Host.
+                </p>
+              </div>
+
+              {/* Primary Start Menu Modes */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button
+                  onClick={() => {
+                    setSetupMode('LOCAL');
+                    setAppPhase('LOBBY_SETUP');
+                  }}
+                  className="p-5 rounded-xl bg-[#D4AF37] text-[#0F0C0A] hover:bg-[#e5c247] transition-all text-left flex flex-col justify-between space-y-3 shadow-xl cursor-pointer"
+                >
+                  <div className="space-y-1">
+                    <div className="text-xs font-extrabold uppercase tracking-wider opacity-80">
+                      Local Pass-and-Play & AI Bots
+                    </div>
+                    <div
+                      className="text-xl md:text-2xl font-bold"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Configure Match & Lobby →
+                    </div>
+                    <p className="text-xs font-medium opacity-90">
+                      Choose from 5 board sizes, customize 2 to 16 Human or AI
+                      Bot contenders, set turn timers, and configure your AI
+                      Host.
+                    </p>
+                  </div>
+                  <div className="text-xs font-extrabold underline">
+                    Open Full Match Architect
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setSetupMode('ONLINE');
+                    setAppPhase('LOBBY_SETUP');
+                  }}
+                  className="p-5 rounded-xl bg-[#0F0C0A] border-2 border-[#D4AF37]/50 hover:border-[#D4AF37] text-[#FAF6F0] transition-all text-left flex flex-col justify-between space-y-3 shadow-xl cursor-pointer"
+                >
+                  <div className="space-y-1">
+                    <div className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
+                      Real-Time WebSocket Rooms
+                    </div>
+                    <div
+                      className="text-xl md:text-2xl font-bold text-white"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Online Multiplayer Room →
+                    </div>
+                    <p className="text-xs text-stone-300">
+                      Create a 6-character room invite code with up to 16
+                      players & bots, or join a friend’s live room code.
+                    </p>
+                  </div>
+                  <div className="text-xs font-bold text-[#D4AF37] underline">
+                    Create or Join Room Code
+                  </div>
+                </button>
+              </div>
+
+              {/* Quick-Launch Board Size Presets (2 to 16 Players) */}
+              <div className="space-y-2.5">
+                <div className="text-xs font-semibold text-stone-300 flex items-center justify-between">
+                  <span>
+                    Or Quick-Launch Recommended Board Size Preset (2–16
+                    Players):
+                  </span>
+                  <span className="text-[11px] text-[#D4AF37]">
+                    1 Human + Recommended AI Bots
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
+                  {(
+                    [
+                      'MINI',
+                      'CLASSIC',
+                      'MEGA',
+                      'CONTINENTAL',
+                      'COLOSSAL',
+                    ] as BoardSizeId[]
+                  ).map((sizeId) => {
+                    const cfg = BOARD_SIZE_CONFIGS[sizeId];
+                    return (
+                      <button
+                        key={sizeId}
+                        onClick={() => handleQuickLaunchPreset(sizeId)}
+                        className="p-3 rounded-xl bg-[#0F0C0A] border border-white/15 hover:border-[#D4AF37] text-left transition-all flex flex-col justify-between space-y-2 cursor-pointer"
+                      >
+                        <div>
+                          <div className="text-xs font-bold text-white">
+                            {cfg.shortLabel}
+                          </div>
+                          <div className="text-[11px] font-bold text-[#D4AF37] mt-0.5">
+                            {cfg.recommendedPlayers}
+                          </div>
+                        </div>
+                        <div className="text-[10px] font-mono text-stone-400 border-t border-white/10 pt-1.5 flex items-center justify-between">
+                          <span>Start ${cfg.startingCash}</span>
+                          <span className="text-[#D4AF37] font-bold">
+                            Play {cfg.defaultPlayerCount}P →
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Pre-Game Setup Lobby (appPhase === 'LOBBY_SETUP') */
+            <div className="w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-2xl bg-[#14100E] border-2 border-[#D4AF37]/60 shadow-2xl p-6 text-[#FAF6F0] space-y-5 my-auto">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+                <div>
+                  <div className="text-xs text-[#D4AF37] font-semibold">
+                    Pre-Game Setup Lobby · Up to 16 Players Across 5 Board
+                    Scales
+                  </div>
+                  <h2
+                    className="text-2xl font-bold"
+                    style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                  >
+                    Configure Your Grand Estates Match
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setAppPhase('START_MENU')}
+                  className="px-3 py-1.5 rounded-lg bg-stone-800 text-xs font-semibold text-stone-200 hover:bg-stone-700"
+                >
+                  ← Back to Start Menu
+                </button>
+              </div>
+
+              {/* 1. 5 Board Sizes (Up to 16 Players) */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-stone-200 flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-[#D4AF37]" />
+                    <span>
+                      1. Choose Board Size (24 to 84 Spaces · Up to 16 Players)
+                    </span>
+                  </label>
+                  <button
+                    onClick={() =>
+                      handleSelectDraftBoardSize(draftBoardSize, true)
+                    }
+                    className="text-xs font-bold text-[#D4AF37] hover:underline"
+                  >
+                    Auto-Fill Recommended Contenders (
+                    {BOARD_SIZE_CONFIGS[draftBoardSize].defaultPlayerCount}{' '}
+                    Players)
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
+                  {(
+                    [
+                      'MINI',
+                      'CLASSIC',
+                      'MEGA',
+                      'CONTINENTAL',
+                      'COLOSSAL',
+                    ] as BoardSizeId[]
+                  ).map((sizeId) => {
+                    const cfg = BOARD_SIZE_CONFIGS[sizeId];
+                    const isSelected = draftBoardSize === sizeId;
+                    return (
+                      <button
+                        key={sizeId}
+                        onClick={() => handleSelectDraftBoardSize(sizeId, true)}
+                        className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between space-y-2 cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#D4AF37]/20 border-[#D4AF37] text-white shadow-lg'
+                            : 'bg-[#0F0C0A] border-white/10 text-stone-300 hover:border-white/30'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="text-xs font-bold text-white">
+                            {cfg.shortLabel}
+                          </div>
+                          <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] text-[10px] font-extrabold">
+                            <Users className="w-3 h-3" />
+                            <span>{cfg.recommendedPlayers}</span>
+                          </div>
+                          <p className="text-[10px] text-stone-400 leading-snug">
+                            Max {cfg.maxAllowedPlayers}P · Start $
+                            {cfg.startingCash}
+                          </p>
+                        </div>
+                        <div className="text-[10px] font-mono text-[#D4AF37] border-t border-white/10 pt-1">
+                          {cfg.gridDimension}×{cfg.gridDimension} Grid
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 2. Starting Board View & Turn-Time Limit */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="p-3 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2">
+                  <div className="text-xs font-semibold text-white">
+                    2. Preferred Board View Mode
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => {
+                        setViewMode('3D');
+                        setCameraPreset('OVERVIEW');
+                      }}
+                      className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold ${
+                        viewMode === '3D' && cameraPreset === 'OVERVIEW'
+                          ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                          : 'bg-[#14100E] text-stone-300 border border-white/10'
+                      }`}
+                    >
+                      3D Perspective
+                    </button>
+                    <button
+                      onClick={() => {
+                        setViewMode('3D');
+                        setCameraPreset('TOP_DOWN');
+                      }}
+                      className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold ${
+                        viewMode === '3D' && cameraPreset === 'TOP_DOWN'
+                          ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                          : 'bg-[#14100E] text-stone-300 border border-white/10'
+                      }`}
+                    >
+                      3D Top-Down
+                    </button>
+                    <button
+                      onClick={() => setViewMode('2D')}
+                      className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold ${
+                        viewMode === '2D'
+                          ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                          : 'bg-[#14100E] text-stone-300 border border-white/10'
+                      }`}
+                    >
+                      2D Easy-Read
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2">
+                  <div className="text-xs font-semibold text-white">
+                    3. Turn-Time Limit Pacing
+                  </div>
+                  <div className="flex gap-1.5">
+                    {[
+                      [30, '30s Blitz'],
+                      [60, '60s Standard'],
+                      [90, '90s Relaxed'],
+                      [0, 'Unlimited'],
+                    ].map(([sec, label]) => (
+                      <button
+                        key={String(sec)}
+                        onClick={() => setDraftTurnLimit(Number(sec))}
+                        className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold ${
+                          draftTurnLimit === Number(sec)
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'bg-[#14100E] text-stone-300 border border-white/10'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Local vs Online Mode Switcher */}
+              <div className="flex gap-2 p-1 bg-[#0F0C0A] rounded-lg border border-white/10">
+                <button
+                  onClick={() => setSetupMode('LOCAL')}
+                  className={`flex-1 py-2 px-3 rounded-md text-xs font-semibold transition-colors ${
+                    setupMode === 'LOCAL'
+                      ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                      : 'text-stone-300 hover:text-white'
+                  }`}
+                >
+                  Local Table (Pass-and-Play + AI Bots · 2–16 Players)
+                </button>
+                <button
+                  onClick={() => setSetupMode('ONLINE')}
+                  className={`flex-1 py-2 px-3 rounded-md text-xs font-semibold transition-colors ${
+                    setupMode === 'ONLINE'
+                      ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                      : 'text-stone-300 hover:text-white'
+                  }`}
+                >
+                  Online Real-Time Multiplayer Room
+                </button>
+              </div>
+
+              {setupMode === 'LOCAL' ? (
+                <div className="space-y-3">
+                  {(() => {
+                    const cfg = BOARD_SIZE_CONFIGS[draftBoardSize];
+                    const count = localDraftPlayers.length;
+                    return (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-stone-200 font-semibold">
+                            4. Contenders Roster ({count} /{' '}
+                            {cfg.maxAllowedPlayers} Max for {cfg.shortLabel})
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 text-[11px] font-semibold">
+                            {cfg.recommendedPlayers}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {[4, 8, 12, 16]
+                            .filter((n) => n <= cfg.maxAllowedPlayers)
+                            .map((n) => (
+                              <button
+                                key={n}
+                                onClick={() =>
+                                  setLocalDraftPlayers(
+                                    buildDraftPlayersForCount(
+                                      n,
+                                      cfg.startingCash
+                                    )
+                                  )
+                                }
+                                className="px-2.5 py-1 rounded bg-[#0F0C0A] border border-white/15 text-[11px] text-stone-300 hover:border-[#D4AF37]"
+                              >
+                                Fill {n}P
+                              </button>
+                            ))}
+                          {localDraftPlayers.length < cfg.maxAllowedPlayers && (
+                            <button
+                              onClick={() => {
+                                const nextIdx = localDraftPlayers.length;
+                                const arch =
+                                  TOKEN_ARCHETYPES[
+                                    nextIdx % TOKEN_ARCHETYPES.length
+                                  ];
+                                const color =
+                                  PLAYER_PALETTE[
+                                    nextIdx % PLAYER_PALETTE.length
+                                  ];
+                                setLocalDraftPlayers((prev) => [
+                                  ...prev,
+                                  {
+                                    id: `draft-${Date.now()}-${nextIdx}`,
+                                    name:
+                                      CONTENDER_NAMES[nextIdx] ||
+                                      `Contender ${nextIdx + 1}`,
+                                    isBot: true,
+                                    token: arch.id,
+                                    color,
+                                    cash: cfg.startingCash,
+                                    position: 0,
+                                    inJail: false,
+                                    jailTurns: 0,
+                                    getOutOfJailCards: 0,
+                                    bankrupt: false,
+                                    connected: true,
+                                  },
+                                ]);
+                              }}
+                              className="px-3 py-1 rounded bg-stone-800 text-xs text-[#D4AF37] font-semibold hover:bg-stone-700"
+                            >
+                              + Add Player / Bot
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                    {localDraftPlayers.map((p, idx) => (
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-2 p-2 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs"
+                      >
+                        <span
+                          className="w-3 h-3 rounded-xs shrink-0"
+                          style={{ backgroundColor: p.color }}
+                        />
+                        <input
+                          type="text"
+                          value={p.name}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setLocalDraftPlayers((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, name: val } : item
+                              )
+                            );
+                          }}
+                          className="flex-1 min-w-[110px] px-2 py-1 rounded bg-[#14100E] border border-white/15 text-white"
+                        />
+                        <select
+                          value={p.token}
+                          onChange={(e) => {
+                            const newToken = e.target.value as TokenArchetype;
+                            setLocalDraftPlayers((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, token: newToken } : item
+                              )
+                            );
+                          }}
+                          className="px-2 py-1 rounded bg-[#14100E] border border-white/15 text-stone-200 text-[11px]"
+                        >
+                          {TOKEN_ARCHETYPES.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() =>
+                            setLocalDraftPlayers((prev) =>
+                              prev.map((item, i) =>
+                                i === idx
+                                  ? { ...item, isBot: !item.isBot }
+                                  : item
+                              )
+                            )
+                          }
+                          className={`px-2 py-1 rounded font-semibold text-[11px] ${
+                            p.isBot
+                              ? 'bg-purple-950/90 text-purple-200 border border-purple-500/30'
+                              : 'bg-emerald-950/90 text-emerald-200 border border-emerald-500/30'
+                          }`}
+                        >
+                          {p.isBot ? 'Bot' : 'Human'}
+                        </button>
+                        {localDraftPlayers.length > 2 && (
+                          <button
+                            onClick={() =>
+                              setLocalDraftPlayers((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              )
+                            }
+                            className="p-1 text-stone-400 hover:text-red-400"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={handleStartLocalMatch}
+                    className="w-full py-3 px-6 rounded-xl bg-[#D4AF37] text-[#0F0C0A] font-extrabold text-sm hover:bg-[#e5c247] transition-colors shadow-lg cursor-pointer"
+                  >
+                    Start Match Now — {BOARD_SIZE_CONFIGS[draftBoardSize].name}{' '}
+                    ({localDraftPlayers.length} Players) →
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setOnlineAction('CREATE')}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border ${
+                        onlineAction === 'CREATE'
+                          ? 'bg-[#D4AF37]/20 border-[#D4AF37] text-white'
+                          : 'bg-[#0F0C0A] border-white/10 text-stone-400'
+                      }`}
+                    >
+                      Create New Room Code
+                    </button>
+                    <button
+                      onClick={() => setOnlineAction('JOIN')}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border ${
+                        onlineAction === 'JOIN'
+                          ? 'bg-[#D4AF37]/20 border-[#D4AF37] text-white'
+                          : 'bg-[#0F0C0A] border-white/10 text-stone-400'
+                      }`}
+                    >
+                      Join Existing 6-Char Code
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-stone-400 mb-1">
+                        Your Display Name
+                      </label>
+                      <input
+                        type="text"
+                        value={onlinePlayerName}
+                        onChange={(e) => setOnlinePlayerName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-[#0F0C0A] border border-white/15 text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-stone-400 mb-1">
+                        Your 3D Sculpted Token
+                      </label>
+                      <select
+                        value={onlinePlayerToken}
+                        onChange={(e) =>
+                          setOnlinePlayerToken(e.target.value as TokenArchetype)
+                        }
+                        className="w-full px-3 py-2 rounded-lg bg-[#0F0C0A] border border-white/15 text-white"
+                      >
+                        {TOKEN_ARCHETYPES.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {onlineAction === 'CREATE' ? (
+                    <div>
+                      <label className="block text-xs text-stone-400 mb-1">
+                        AI Bot Contenders in Online Room (0 to{' '}
+                        {BOARD_SIZE_CONFIGS[draftBoardSize].maxAllowedPlayers -
+                          1}{' '}
+                        ·{' '}
+                        {BOARD_SIZE_CONFIGS[draftBoardSize].recommendedPlayers})
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={
+                          BOARD_SIZE_CONFIGS[draftBoardSize].maxAllowedPlayers -
+                          1
+                        }
+                        value={onlineBotCount}
+                        onChange={(e) =>
+                          setOnlineBotCount(
+                            Math.max(
+                              0,
+                              Math.min(
+                                BOARD_SIZE_CONFIGS[draftBoardSize]
+                                  .maxAllowedPlayers - 1,
+                                Number(e.target.value)
+                              )
+                            )
+                          )
+                        }
+                        className="w-32 px-3 py-1.5 rounded-lg bg-[#0F0C0A] border border-white/15 text-xs text-white"
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-xs text-stone-400 mb-1">
+                        Enter 6-Character Room Invite Code
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        value={joinRoomCodeInput}
+                        onChange={(e) =>
+                          setJoinRoomCodeInput(e.target.value.toUpperCase())
+                        }
+                        placeholder="e.g. K9X4M2"
+                        className="w-48 px-3 py-2 rounded-lg bg-[#0F0C0A] border border-[#D4AF37]/50 text-sm font-mono uppercase text-[#D4AF37]"
+                      />
+                    </div>
+                  )}
+
+                  {roomError && (
+                    <p className="text-xs text-red-400">{roomError}</p>
+                  )}
+
+                  <button
+                    onClick={handleConnectOnlineRoom}
+                    className="w-full py-3 px-6 rounded-xl bg-[#D4AF37] text-[#0F0C0A] font-extrabold text-sm hover:bg-[#e5c247] transition-colors cursor-pointer"
+                  >
+                    {onlineAction === 'CREATE'
+                      ? `Launch Online ${BOARD_SIZE_CONFIGS[draftBoardSize].shortLabel} Room →`
+                      : 'Join Multiplayer Room Now →'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. Dynamic Global Event Banner (Triggered automatically by the game engine every 4 turns) */}
+      {appPhase === 'IN_GAME' && gameState.lastTriggeredGlobalEvent && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-30 w-[92vw] max-w-2xl rounded-xl bg-[#18120F] border border-[#D4AF37]/50 shadow-2xl px-5 py-3.5 text-[#FAF6F0]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs text-[#D4AF37] font-semibold">
+                {gameState.lastTriggeredGlobalEvent.event.category ===
+                  'CRASH' ||
+                gameState.lastTriggeredGlobalEvent.event.category ===
+                  'AUDIT' ? (
+                  <TrendingDown className="w-4 h-4 text-red-400" />
+                ) : (
+                  <TrendingUp className="w-4 h-4 text-emerald-400" />
+                )}
+                <span>
+                  Automatic Periodic Market Event ·{' '}
+                  {gameState.lastTriggeredGlobalEvent.event.impactLabel}
+                </span>
+              </div>
+              <h2
+                className="text-lg font-bold text-[#FAF6F0]"
+                style={{ fontFamily: 'var(--font-fraunces), serif' }}
+              >
+                {gameState.lastTriggeredGlobalEvent.event.title}
+              </h2>
+              <p className="text-xs text-stone-300 leading-relaxed">
+                {gameState.lastTriggeredGlobalEvent.event.summary}
+              </p>
+              {gameState.lastTriggeredGlobalEvent.playerImpacts.some(
+                (i) => i.deltaCash !== 0
+              ) && (
+                <div
+                  className="pt-1 text-xs text-stone-300 tabular-nums"
+                  style={{ fontFamily: 'var(--font-mono), monospace' }}
+                >
+                  Treasury Adjustments:{' '}
+                  {gameState.lastTriggeredGlobalEvent.playerImpacts
+                    .map(
+                      (imp) =>
+                        `${imp.playerName}: ${
+                          imp.deltaCash >= 0 ? '+' : ''
+                        }$${imp.deltaCash}`
+                    )
+                    .join(' · ')}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() =>
+                dispatchAction({ type: 'DISMISS_GLOBAL_EVENT_BANNER' })
+              }
+              className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+              aria-label="Dismiss Global Event Notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Monopoly Turn Resolution & Action Pop-up Modal (Buy Property, Rent Paid, Tax, Card Drawn, Detention, Bankruptcy) */}
+      {appPhase === 'IN_GAME' &&
+        gameState.status === 'PLAYING' &&
+        gameState.turnNotice &&
+        (() => {
+          const notice = gameState.turnNotice;
+          const noticePlayer = gameState.players.find(
+            (p) => p.id === notice.playerId
+          );
+          const isHumanNotice =
+            !noticePlayer?.isBot ||
+            notice.kind === 'BANKRUPTCY' ||
+            (notice.kind === 'RENT_PAID' &&
+              notice.creditorId === localPlayerId);
+
+          if (!isHumanNotice) return null;
+
+          const noticeTile = activeTiles[notice.tileIndex] || activeTiles[0];
+          const noticeEffectivePrice = getEffectivePropertyPrice(
+            gameState,
+            noticeTile.index
+          );
+
+          return (
+            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
+              <div className="w-full max-w-md rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-5 text-[#FAF6F0] space-y-4">
+                {/* Top Dice & Passed GO Status Header */}
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="px-2 py-0.5 rounded bg-[#D4AF37]/20 text-[#D4AF37] font-bold uppercase">
+                      {notice.kind === 'BUY_DECISION'
+                        ? 'Available Title Deed'
+                        : notice.kind === 'RENT_PAID'
+                        ? 'Rent Payment Notice'
+                        : notice.kind === 'TAX_PAID'
+                        ? 'Sovereign Tax Levy'
+                        : notice.kind === 'CARD_DRAWN'
+                        ? notice.cardDeck === 'CHANCE'
+                          ? 'Fortune & Venture Card'
+                          : 'Sovereign Treasury Card'
+                        : notice.kind === 'JAIL_EVENT'
+                        ? 'Compliance Detention'
+                        : notice.kind === 'BANKRUPTCY'
+                        ? 'Bankruptcy Declaration'
+                        : 'Turn Resolution'}
+                    </span>
+                    {notice.passedGoBonus && (
+                      <span className="px-2 py-0.5 rounded bg-emerald-900/90 text-emerald-300 font-mono font-bold">
+                        +$200 Passed GO!
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs font-mono text-stone-300">
+                    <Dices className="w-4 h-4 text-[#D4AF37]" />
+                    <span>
+                      {gameState.dice[0]}+{gameState.dice[1]}=
+                      {gameState.dice[0] + gameState.dice[1]}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Official Title Deed Card Preview if BUY_DECISION */}
+                {notice.kind === 'BUY_DECISION' ? (
+                  <div className="rounded-xl bg-[#FAF6F0] text-[#14100E] border border-[#D4AF37] p-3.5 space-y-2.5">
+                    <div
+                      className="p-2.5 rounded-lg text-center text-white font-bold"
+                      style={{ backgroundColor: noticeTile.colorHex }}
+                    >
+                      <div className="text-[10px] uppercase tracking-wider opacity-90">
+                        TITLE DEED · {noticeTile.city}
+                      </div>
+                      <div
+                        className="text-lg"
+                        style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                      >
+                        {noticeTile.name}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs font-mono border-b border-stone-300 pb-1.5">
+                      <span>Acquisition Price:</span>
+                      <span className="text-base font-extrabold text-stone-900">
+                        ${noticeEffectivePrice}
+                      </span>
+                    </div>
+
+                    {noticeTile.rent && noticeTile.rent.length > 0 && (
+                      <div className="grid grid-cols-3 gap-1 text-[11px] font-mono text-center">
+                        <div className="p-1 rounded bg-stone-200/80">
+                          <div className="text-[9px] text-stone-500">
+                            Base Rent
+                          </div>
+                          <div className="font-bold">${noticeTile.rent[0]}</div>
+                        </div>
+                        <div className="p-1 rounded bg-stone-200/80">
+                          <div className="text-[9px] text-stone-500">
+                            1 Villa
+                          </div>
+                          <div className="font-bold">
+                            ${noticeTile.rent[1] ?? noticeTile.rent[0] * 2}
+                          </div>
+                        </div>
+                        <div className="p-1 rounded bg-stone-200/80">
+                          <div className="text-[9px] text-stone-500">Hotel</div>
+                          <div className="font-bold text-red-700">
+                            $
+                            {noticeTile.rent[5] ??
+                              noticeTile.rent[noticeTile.rent.length - 1]}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between text-xs pt-1 border-t border-stone-300">
+                      <span className="text-stone-600">
+                        Your Current Treasury:
+                      </span>
+                      <span className="font-mono font-bold text-emerald-700">
+                        ${currentPlayer?.cash || 0}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  /* Standard Event / Rent / Tax / Card / Bankruptcy Card */
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/15 space-y-2.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs text-[#D4AF37] font-semibold">
+                          {notice.subtitle}
+                        </div>
+                        <h3
+                          className="text-xl font-bold text-white mt-0.5 flex items-center gap-2"
+                          style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                        >
+                          <span
+                            className="w-3.5 h-3.5 rounded-xs shrink-0 border border-white/25"
+                            style={{ backgroundColor: notice.tileColorHex }}
+                          />
+                          <span>{notice.title}</span>
+                        </h3>
+                      </div>
+
+                      {typeof notice.amountDelta === 'number' &&
+                        notice.amountDelta !== 0 && (
+                          <div
+                            className={`px-2.5 py-1 rounded-lg font-mono text-sm font-extrabold shrink-0 ${
+                              notice.amountDelta > 0
+                                ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                                : 'bg-red-950 text-red-300 border border-red-500/40'
+                            }`}
+                          >
+                            {notice.amountDelta > 0
+                              ? `+$${notice.amountDelta}`
+                              : `-$${Math.abs(notice.amountDelta)}`}
+                          </div>
+                        )}
+                    </div>
+
+                    <p className="text-xs text-stone-300 leading-relaxed">
+                      {notice.description}
+                    </p>
+
+                    {noticePlayer && !noticePlayer.bankrupt && (
+                      <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs">
+                        <span className="text-stone-400">
+                          {noticePlayer.name}’s Updated Balance:
+                        </span>
+                        <span className="font-mono font-bold text-[#D4AF37]">
+                          ${noticePlayer.cash}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                {notice.kind === 'BUY_DECISION' &&
+                isMyTurn &&
+                gameState.phase === 'ACTION' ? (
+                  <div className="flex items-center gap-2.5 pt-1">
+                    <button
+                      onClick={() => dispatchAction({ type: 'BUY_PROPERTY' })}
+                      disabled={currentPlayer.cash < noticeEffectivePrice}
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 text-white font-extrabold text-xs hover:bg-emerald-500 disabled:opacity-40 transition-colors cursor-pointer"
+                    >
+                      Buy Property (${noticeEffectivePrice})
+                    </button>
+                    <button
+                      onClick={() =>
+                        dispatchAction({ type: 'DECLINE_PROPERTY' })
+                      }
+                      className="py-2.5 px-4 rounded-xl bg-stone-800 border border-[#D4AF37]/50 text-[#D4AF37] font-bold text-xs hover:bg-stone-700 transition-colors cursor-pointer"
+                    >
+                      Send to Auction
+                    </button>
+                  </div>
+                ) : isMyTurn && gameState.phase === 'END_TURN' ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      onClick={() => dispatchAction({ type: 'END_TURN' })}
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-[#D4AF37] text-[#0F0C0A] font-extrabold text-xs hover:bg-[#e5c247] transition-colors cursor-pointer"
+                    >
+                      {gameState.lastRollWasDoubles
+                        ? 'Continue & Roll Again (Doubles!)'
+                        : 'Acknowledge & End Turn →'}
+                    </button>
+                    <button
+                      onClick={() =>
+                        dispatchAction({ type: 'DISMISS_TURN_NOTICE' })
+                      }
+                      className="py-2.5 px-3 rounded-xl bg-stone-800 text-stone-200 font-semibold text-xs hover:bg-stone-700 transition-colors cursor-pointer"
+                    >
+                      Manage Estates First
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() =>
+                      dispatchAction({ type: 'DISMISS_TURN_NOTICE' })
+                    }
+                    className="w-full py-2.5 px-4 rounded-xl bg-[#D4AF37] text-[#0F0C0A] font-extrabold text-xs hover:bg-[#e5c247] transition-colors cursor-pointer"
+                  >
+                    Continue
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+      {/* 4B. Championship Victory Pop-up Modal (When status === 'GAME_OVER') */}
+      {appPhase === 'IN_GAME' && gameState.status === 'GAME_OVER' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-6 text-[#FAF6F0] text-center space-y-4">
+            <div className="text-xs font-extrabold uppercase tracking-wider text-[#D4AF37]">
+              Grand Estates 3D Championship Complete
+            </div>
+            <h2
+              className="text-3xl font-bold text-white"
+              style={{ fontFamily: 'var(--font-fraunces), serif' }}
+            >
+              {gameState.players.find((p) => p.id === gameState.winnerId)
+                ?.name || 'Sovereign Tycoon'}{' '}
+              Wins!
+            </h2>
+            <p className="text-xs text-stone-300">
+              All rival contenders have been eliminated into bankruptcy. The
+              entire global landmark portfolio stands under one sovereign
+              syndicate!
+            </p>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setAppPhase('LOBBY_SETUP')}
+                className="flex-1 py-3 px-4 rounded-xl bg-[#D4AF37] text-[#0F0C0A] font-extrabold text-xs hover:bg-[#e5c247]"
+              >
+                Configure New Match in Lobby
+              </button>
+              <button
+                onClick={() => setAppPhase('START_MENU')}
+                className="py-3 px-4 rounded-xl bg-stone-800 text-stone-200 font-semibold text-xs hover:bg-stone-700"
+              >
+                Start Menu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Live Auction Modal (Appears when phase === 'AUCTION') */}
+      {gameState.phase === 'AUCTION' && gameState.activeAuction && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
+          <div className="w-full max-w-lg rounded-xl bg-[#14100E] border border-[#D4AF37]/40 shadow-2xl p-6 text-[#FAF6F0]">
+            {(() => {
+              const auction = gameState.activeAuction!;
+              const auctionTile =
+                activeTiles[auction.tileIndex] || activeTiles[0];
+              const activeBidderId =
+                auction.activeBidderIds[auction.currentBidderIndex];
+              const activeBidder = gameState.players.find(
+                (p) => p.id === activeBidderId
+              );
+              const highestBidder = auction.highestBidderId
+                ? gameState.players.find(
+                    (p) => p.id === auction.highestBidderId
+                  )
+                : null;
+              const minNextBid =
+                auction.highestBidderId === null
+                  ? auction.highestBid
+                  : auction.highestBid + 10;
+
+              return (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                    <div>
+                      <div className="text-xs text-[#D4AF37] font-medium flex items-center gap-1.5">
+                        <Gavel className="w-4 h-4" />
+                        Live Sotheby’s Style Deed Auction
+                      </div>
+                      <h2
+                        className="text-xl font-bold mt-0.5"
+                        style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                      >
+                        {auctionTile.name} ({auctionTile.city})
+                      </h2>
+                    </div>
+                    <div
+                      className="text-right tabular-nums"
+                      style={{ fontFamily: 'var(--font-mono), monospace' }}
+                    >
+                      <div className="text-xs text-stone-400">Current Bid</div>
+                      <div className="text-xl font-bold text-[#D4AF37]">
+                        ${auction.highestBid}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-stone-300 flex items-center justify-between">
+                    <span>
+                      Leading Contender:{' '}
+                      <strong className="text-white">
+                        {highestBidder
+                          ? highestBidder.name
+                          : 'No bids placed yet'}
+                      </strong>
+                    </span>
+                    <span className="tabular-nums">
+                      Listed Value: ${auctionTile.price}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-lg bg-[#0F0C0A] border border-white/10">
+                    <div className="text-xs text-stone-400">
+                      Floor Podium Turn:
+                    </div>
+                    <div className="text-sm font-semibold text-white mt-0.5 flex items-center justify-between">
+                      <span>{activeBidder?.name}</span>
+                      <span
+                        className="text-[#D4AF37] tabular-nums"
+                        style={{ fontFamily: 'var(--font-mono), monospace' }}
+                      >
+                        Balance: ${activeBidder?.cash || 0}
+                      </span>
+                    </div>
+                  </div>
+
+                  {activeBidder && !activeBidder.isBot ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
+                      <button
+                        onClick={() =>
+                          dispatchAction({
+                            type: 'AUCTION_BID',
+                            playerId: activeBidder.id,
+                            amount: minNextBid,
+                          })
+                        }
+                        disabled={activeBidder.cash < minNextBid}
+                        className="flex-1 py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-semibold text-xs hover:bg-[#e5c247] disabled:opacity-40 transition-colors whitespace-nowrap"
+                      >
+                        Bid ${minNextBid}
+                      </button>
+                      <button
+                        onClick={() =>
+                          dispatchAction({
+                            type: 'AUCTION_BID',
+                            playerId: activeBidder.id,
+                            amount: minNextBid + 25,
+                          })
+                        }
+                        disabled={activeBidder.cash < minNextBid + 25}
+                        className="flex-1 py-2.5 px-4 rounded-lg bg-stone-800 border border-[#D4AF37]/40 text-[#FAF6F0] font-semibold text-xs hover:bg-stone-700 disabled:opacity-40 transition-colors whitespace-nowrap"
+                      >
+                        Jump Bid ${minNextBid + 25}
+                      </button>
+                      <button
+                        onClick={() =>
+                          dispatchAction({
+                            type: 'AUCTION_PASS',
+                            playerId: activeBidder.id,
+                          })
+                        }
+                        className="py-2.5 px-4 rounded-lg bg-red-950/80 border border-red-500/40 text-red-200 font-semibold text-xs hover:bg-red-900 transition-colors whitespace-nowrap"
+                      >
+                        Pass Lot
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-[#D4AF37] py-2">
+                      {activeBidder?.name} is evaluating the bid lot...
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* 6. Pending Trade Proposal Modal (For Human Recipients) */}
+      {gameState.activeTrade && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
+          <div className="w-full max-w-md rounded-xl bg-[#14100E] border border-[#D4AF37]/40 shadow-2xl p-6 text-[#FAF6F0] space-y-4">
+            {(() => {
+              const trade = gameState.activeTrade!;
+              const fromP = gameState.players.find(
+                (p) => p.id === trade.fromPlayerId
+              );
+              const toP = gameState.players.find(
+                (p) => p.id === trade.toPlayerId
+              );
+              return (
+                <>
+                  <h3
+                    className="text-lg font-bold"
+                    style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                  >
+                    Bilateral Trade Offer: {fromP?.name} → {toP?.name}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-[#0F0C0A] border border-white/10 space-y-1">
+                      <div className="text-stone-400">
+                        {fromP?.name} Offers:
+                      </div>
+                      <div className="font-semibold text-emerald-400 tabular-nums">
+                        ${trade.offerCash} Cash
+                      </div>
+                      {trade.offerProperties.map((idx) => (
+                        <div key={idx} className="text-stone-200">
+                          • {activeTiles[idx]?.name}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-3 rounded-lg bg-[#0F0C0A] border border-white/10 space-y-1">
+                      <div className="text-stone-400">
+                        In Exchange For ({toP?.name}):
+                      </div>
+                      <div className="font-semibold text-[#D4AF37] tabular-nums">
+                        ${trade.requestCash} Cash
+                      </div>
+                      {trade.requestProperties.map((idx) => (
+                        <div key={idx} className="text-stone-200">
+                          • {activeTiles[idx]?.name}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 pt-2">
+                    <button
+                      onClick={() =>
+                        dispatchAction({ type: 'RESPOND_TRADE', accept: true })
+                      }
+                      className="flex-1 py-2 px-4 rounded-lg bg-emerald-600 text-white font-semibold text-xs hover:bg-emerald-500 transition-colors"
+                    >
+                      Accept Deal
+                    </button>
+                    <button
+                      onClick={() =>
+                        dispatchAction({ type: 'RESPOND_TRADE', accept: false })
+                      }
+                      className="flex-1 py-2 px-4 rounded-lg bg-red-950 border border-red-500/40 text-red-200 font-semibold text-xs hover:bg-red-900 transition-colors"
+                    >
+                      Decline Deal
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* 7. Secondary Modal Drawers (Deed Inspector + Google Search, Macro Events, Portfolio, Trade, AI Host, Lobby) */}
+      {activeModal !== 'NONE' && (
+        <div className="fixed inset-x-0 top-14 bottom-28 z-30 flex items-center justify-center p-4 pointer-events-none">
+          <div className="w-full max-w-3xl max-h-full overflow-y-auto rounded-xl bg-[#14100E] border border-[#D4AF37]/35 shadow-2xl p-6 text-[#FAF6F0] pointer-events-auto">
+            {/* DEED INSPECTOR & GOOGLE SEARCH LANDMARK INTEL */}
+            {activeModal === 'DEED' && (
+              <div className="space-y-5">
+                <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+                  <div>
+                    <div className="text-xs text-stone-400">
+                      Space #{selectedTile.index} · {selectedTile.city},{' '}
+                      {selectedTile.country} ·{' '}
+                      {COLOR_GROUP_NAMES[selectedTile.group]}
+                    </div>
+                    <h2
+                      className="text-2xl font-bold mt-1 flex items-center gap-3"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      <span
+                        className="inline-block w-4 h-4 rounded-sm shrink-0 border border-white/20"
+                        style={{ backgroundColor: selectedTile.colorHex }}
+                      />
+                      {selectedTile.name}
+                    </h2>
+                    <p className="text-xs text-stone-300 mt-1">
+                      {selectedTile.description}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveModal('NONE')}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Left column: Official Title Deed & Building Controls */}
+                  <div className="p-4 rounded-xl bg-[#FAF6F0] text-[#14100E] border border-[#D4AF37] space-y-3">
+                    <div
+                      className="p-2.5 rounded-lg text-center text-white font-bold"
+                      style={{ backgroundColor: selectedTile.colorHex }}
+                    >
+                      <div className="text-[11px] opacity-90">
+                        TITLE DEED · {selectedTile.city.toUpperCase()}
+                      </div>
+                      <div
+                        className="text-lg"
+                        style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                      >
+                        {selectedTile.shortName}
+                      </div>
+                    </div>
+
+                    {selectedTile.price ? (
+                      <div
+                        className="text-xs space-y-1.5 tabular-nums"
+                        style={{ fontFamily: 'var(--font-mono), monospace' }}
+                      >
+                        <div className="flex justify-between py-1 border-b border-stone-300 font-semibold">
+                          <span>Market Acquisition Price</span>
+                          <span>
+                            ${selectedEffectivePrice}
+                            {selectedEffectivePrice !== selectedTile.price && (
+                              <span className="text-stone-500 line-through ml-1.5">
+                                ${selectedTile.price}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        {selectedTile.rent &&
+                          selectedTile.type === 'PROPERTY' && (
+                            <>
+                              <div className="flex justify-between">
+                                <span>Base Site Rent</span>
+                                <span>${selectedTile.rent[0]}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>With 1 Villa</span>
+                                <span>${selectedTile.rent[1]}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>With 2 Villas</span>
+                                <span>${selectedTile.rent[2]}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>With 3 Villas</span>
+                                <span>${selectedTile.rent[3]}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>With 4 Villas</span>
+                                <span>${selectedTile.rent[4]}</span>
+                              </div>
+                              <div className="flex justify-between font-bold text-red-700">
+                                <span>With Grand Hotel</span>
+                                <span>${selectedTile.rent[5]}</span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-stone-300">
+                                <span>Villa / Hotel Construction</span>
+                                <span>${selectedEffectiveHouseCost} each</span>
+                              </div>
+                            </>
+                          )}
+                        <div className="flex justify-between pt-1 border-t border-stone-300 text-stone-600">
+                          <span>Current Title Holder</span>
+                          <span className="font-bold text-stone-900">
+                            {selectedOwner
+                              ? `${selectedOwner.name}${
+                                  selectedPropState?.mortgaged
+                                    ? ' (Mortgaged)'
+                                    : ''
+                                }`
+                              : 'Unowned (Sovereign Bank)'}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-stone-700 py-4 text-center">
+                        Special Sovereign Board Space — Not a private deed.
+                      </p>
+                    )}
+
+                    {/* Build / Sell / Mortgage actions if owned by active player */}
+                    {selectedPropState &&
+                      selectedPropState.ownerId ===
+                        activeControllablePlayer?.id && (
+                        <div className="pt-2 border-t border-stone-300 flex flex-wrap gap-2">
+                          {selectedTile.type === 'PROPERTY' && (
+                            <>
+                              <button
+                                onClick={() =>
+                                  dispatchAction({
+                                    type: 'BUILD_HOUSE',
+                                    playerId: activeControllablePlayer.id,
+                                    tileIndex: selectedTile.index,
+                                  })
+                                }
+                                disabled={
+                                  !canBuildHouseOnTile(
+                                    gameState,
+                                    activeControllablePlayer.id,
+                                    selectedTile.index
+                                  ).allowed
+                                }
+                                className="flex-1 py-1.5 px-3 rounded bg-[#14100E] text-[#D4AF37] text-xs font-semibold disabled:opacity-40"
+                              >
+                                Build (+${selectedEffectiveHouseCost})
+                              </button>
+                              <button
+                                onClick={() =>
+                                  dispatchAction({
+                                    type: 'SELL_HOUSE',
+                                    playerId: activeControllablePlayer.id,
+                                    tileIndex: selectedTile.index,
+                                  })
+                                }
+                                disabled={selectedPropState.houses <= 0}
+                                className="py-1.5 px-3 rounded bg-stone-200 text-stone-900 text-xs font-semibold disabled:opacity-40"
+                              >
+                                Sell Building
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() =>
+                              dispatchAction({
+                                type: 'TOGGLE_MORTGAGE',
+                                playerId: activeControllablePlayer.id,
+                                tileIndex: selectedTile.index,
+                              })
+                            }
+                            disabled={selectedPropState.houses > 0}
+                            className="w-full py-1.5 px-3 rounded border border-stone-400 text-stone-800 text-xs font-semibold hover:bg-stone-200 disabled:opacity-40"
+                          >
+                            {selectedPropState.mortgaged
+                              ? 'Unmortgage Deed'
+                              : 'Mortgage Deed'}
+                          </button>
+                        </div>
+                      )}
+                  </div>
+
+                  {/* Right column: Live Google Search Grounding City & Landmark Intelligence */}
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 flex flex-col justify-between space-y-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-[#D4AF37] flex items-center gap-1.5">
+                          <Globe className="w-4 h-4" />
+                          Google Search Landmark Intelligence
+                        </span>
+                        <button
+                          onClick={() => fetchLandmarkIntel(selectedTile.index)}
+                          disabled={loadingIntelKey === selectedIntelKey}
+                          className="px-3 py-1 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-semibold hover:bg-[#e5c247] disabled:opacity-50 transition-colors whitespace-nowrap"
+                        >
+                          {loadingIntelKey === selectedIntelKey
+                            ? 'Searching Web...'
+                            : landmarkIntelCache[selectedIntelKey]
+                            ? 'Refresh Intel'
+                            : 'Fetch Live City Intel'}
+                        </button>
+                      </div>
+
+                      {intelError && (
+                        <p className="text-xs text-red-400">{intelError}</p>
+                      )}
+
+                      {landmarkIntelCache[selectedIntelKey] ? (
+                        <div className="space-y-3 text-xs text-stone-200 leading-relaxed max-h-60 overflow-y-auto pr-1">
+                          <div className="markdown-body prose prose-invert prose-xs max-w-none">
+                            <Markdown>
+                              {landmarkIntelCache[selectedIntelKey].text}
+                            </Markdown>
+                          </div>
+                          {landmarkIntelCache[selectedIntelKey].sources.length >
+                            0 && (
+                            <div className="pt-2 border-t border-white/10 space-y-1">
+                              <div className="text-[11px] text-stone-400 font-semibold">
+                                Verified Web Sources:
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {landmarkIntelCache[
+                                  selectedIntelKey
+                                ].sources.map((src, i) => (
+                                  <a
+                                    key={i}
+                                    href={src.uri}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[11px] text-[#D4AF37] underline hover:text-white truncate max-w-[220px]"
+                                  >
+                                    {src.title}
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-stone-400 leading-relaxed pt-2">
+                          Click <strong>Fetch Live City Intel</strong> to query{' '}
+                          <code>gemini-3.8-flash</code> with Google Search
+                          grounding for up-to-date cultural history, luxury real
+                          estate benchmarks, and trivia about{' '}
+                          <strong>{selectedTile.name}</strong> in{' '}
+                          {selectedTile.city}.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Navigate through all active spaces quickly */}
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                      <button
+                        onClick={() =>
+                          setSelectedTileIndex(
+                            (i) =>
+                              (i - 1 + activeTiles.length) % activeTiles.length
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-stone-800 text-xs text-stone-200 hover:bg-stone-700"
+                      >
+                        ← Prev Space
+                      </button>
+                      <span className="text-xs text-stone-400 tabular-nums">
+                        Tile {selectedTile.index + 1} of {activeTiles.length}
+                      </span>
+                      <button
+                        onClick={() =>
+                          setSelectedTileIndex(
+                            (i) => (i + 1) % activeTiles.length
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-stone-800 text-xs text-stone-200 hover:bg-stone-700"
+                      >
+                        Next Space →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* DYNAMIC GLOBAL MACRO EVENTS DRAWER (Engine-Managed Only) */}
+            {activeModal === 'EVENTS' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <div className="text-xs text-[#D4AF37] font-medium">
+                      Autonomous Macro-Economic Engine · Next Scheduled Event in{' '}
+                      {gameState.turnsUntilNextEvent} Turns
+                    </div>
+                    <h2
+                      className="text-xl font-bold"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Global Market Events & Forecast
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => setActiveModal('NONE')}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {gameState.activeGlobalEvent ? (
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-[#D4AF37]/50 space-y-1">
+                    <div className="text-xs text-[#D4AF37] font-semibold">
+                      CURRENTLY ACTIVE MARKET MODIFIER (
+                      {gameState.activeGlobalEvent.remainingTurns} Turns
+                      Remaining)
+                    </div>
+                    <div className="text-base font-bold text-white">
+                      {gameState.activeGlobalEvent.event.title}
+                    </div>
+                    <p className="text-xs text-stone-300">
+                      {gameState.activeGlobalEvent.event.summary}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-[#0F0C0A] border border-white/10 text-xs text-stone-300">
+                    Market conditions are currently at baseline. The game engine
+                    automatically triggers a random macro-economic event every 4
+                    completed turns ({gameState.turnsUntilNextEvent} turns
+                    remaining until next market shift).
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {GLOBAL_EVENTS.map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="p-3.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex flex-col justify-between space-y-2"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-[#D4AF37]">
+                            {ev.impactLabel}
+                          </span>
+                          <span className="text-[10px] font-mono text-stone-400 bg-[#14100E] px-2 py-0.5 rounded border border-white/10">
+                            Engine Managed
+                          </span>
+                        </div>
+                        <h3
+                          className="text-sm font-bold text-white"
+                          style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                        >
+                          {ev.title}
+                        </h3>
+                        <p className="text-xs text-stone-400 leading-relaxed">
+                          {ev.summary}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* PORTFOLIO & BUILDING MANAGER */}
+            {activeModal === 'PORTFOLIO' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <div className="text-xs text-[#D4AF37] font-medium flex items-center gap-3">
+                      <span>Sovereign Asset Ledger & Construction</span>
+                      <button
+                        onClick={() => setActiveModal('TRADE')}
+                        className="px-2.5 py-0.5 rounded bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-[#D4AF37] hover:text-[#0F0C0A] transition-colors font-semibold"
+                      >
+                        Open Trade Desk →
+                      </button>
+                    </div>
+                    <h2
+                      className="text-xl font-bold"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Player Holdings & Villas ({activeBoardConfig.shortLabel})
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => setActiveModal('NONE')}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {gameState.players.map((p) => {
+                    const owned = Object.values(gameState.properties).filter(
+                      (pr) => pr.ownerId === p.id
+                    );
+                    return (
+                      <div
+                        key={p.id}
+                        className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="w-3 h-3 rounded-sm"
+                              style={{ backgroundColor: p.color }}
+                            />
+                            <span className="font-bold text-sm">{p.name}</span>
+                          </div>
+                          <span
+                            className="text-sm font-bold text-[#D4AF37] tabular-nums"
+                            style={{ fontFamily: 'var(--font-mono), monospace' }}
+                          >
+                            ${p.cash}
+                          </span>
+                        </div>
+                        <div className="text-xs text-stone-400">
+                          Position: {activeTiles[p.position]?.name} ·{' '}
+                          {owned.length} Deeds Owned
+                        </div>
+                        {owned.length > 0 ? (
+                          <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                            {owned.map((pr) => {
+                              const t = activeTiles[pr.tileIndex];
+                              if (!t) return null;
+                              const canBuild = canBuildHouseOnTile(
+                                gameState,
+                                p.id,
+                                pr.tileIndex
+                              ).allowed;
+                              return (
+                                <div
+                                  key={pr.tileIndex}
+                                  className="flex items-center justify-between text-xs p-1.5 rounded bg-[#14100E] border border-white/5"
+                                >
+                                  <button
+                                    onClick={() => {
+                                      setSelectedTileIndex(pr.tileIndex);
+                                      setActiveModal('DEED');
+                                    }}
+                                    className="flex items-center gap-2 text-left hover:text-[#D4AF37]"
+                                  >
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                      style={{ backgroundColor: t.colorHex }}
+                                    />
+                                    <span className="truncate max-w-[150px]">
+                                      {t.shortName}
+                                    </span>
+                                    {pr.houses > 0 && (
+                                      <span className="text-emerald-400 font-mono">
+                                        {pr.houses === 5
+                                          ? 'HOTEL'
+                                          : `${pr.houses}V`}
+                                      </span>
+                                    )}
+                                    {pr.mortgaged && (
+                                      <span className="text-red-400">
+                                        MORTGAGED
+                                      </span>
+                                    )}
+                                  </button>
+                                  {!p.isBot && canBuild && (
+                                    <button
+                                      onClick={() =>
+                                        dispatchAction({
+                                          type: 'BUILD_HOUSE',
+                                          playerId: p.id,
+                                          tileIndex: pr.tileIndex,
+                                        })
+                                      }
+                                      className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-semibold text-[11px]"
+                                    >
+                                      +Build
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-stone-500 italic">
+                            No landmarks acquired yet.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* BILATERAL TRADE DESK */}
+            {activeModal === 'TRADE' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <div className="text-xs text-[#D4AF37] font-medium">
+                      Mergers & Acquisitions Desk
+                    </div>
+                    <h2
+                      className="text-xl font-bold"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Propose Deed & Cash Trade
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => setActiveModal('NONE')}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {(() => {
+                  const initiator = activeControllablePlayer;
+                  const partners = gameState.players.filter(
+                    (p) => p.id !== initiator?.id && !p.bankrupt
+                  );
+                  const partner =
+                    partners.find((p) => p.id === tradeTargetId) || partners[0];
+                  const myProps = Object.values(gameState.properties).filter(
+                    (pr) => pr.ownerId === initiator?.id && pr.houses === 0
+                  );
+                  const partnerProps = Object.values(
+                    gameState.properties
+                  ).filter(
+                    (pr) => pr.ownerId === partner?.id && pr.houses === 0
+                  );
+
+                  return (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-stone-400">Counterparty:</span>
+                        <div className="flex flex-wrap gap-2">
+                          {partners.map((pt) => (
+                            <button
+                              key={pt.id}
+                              onClick={() => {
+                                setTradeTargetId(pt.id);
+                                setTradeRequestProps([]);
+                              }}
+                              className={`px-3 py-1.5 rounded-lg font-semibold transition-colors ${
+                                partner?.id === pt.id
+                                  ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                                  : 'bg-[#0F0C0A] text-stone-300 border border-white/10'
+                              }`}
+                            >
+                              {pt.name} (${pt.cash})
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-3">
+                          <div className="text-xs font-semibold text-[#D4AF37]">
+                            Your Offer ({initiator?.name})
+                          </div>
+                          <div>
+                            <label className="block text-xs text-stone-400 mb-1">
+                              Cash Offered (Max ${initiator?.cash || 0})
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={initiator?.cash || 0}
+                              value={tradeOfferCash}
+                              onChange={(e) =>
+                                setTradeOfferCash(
+                                  Math.max(0, Number(e.target.value))
+                                )
+                              }
+                              className="w-full px-3 py-1.5 rounded bg-[#14100E] border border-white/15 text-xs text-white tabular-nums"
+                            />
+                          </div>
+                          <div className="space-y-1 max-h-36 overflow-y-auto">
+                            <div className="text-xs text-stone-400">
+                              Select Deeds to Offer:
+                            </div>
+                            {myProps.length === 0 && (
+                              <div className="text-xs text-stone-500 italic">
+                                No unimproved deeds owned.
+                              </div>
+                            )}
+                            {myProps.map((pr) => {
+                              const checked = tradeOfferProps.includes(
+                                pr.tileIndex
+                              );
+                              return (
+                                <label
+                                  key={pr.tileIndex}
+                                  className="flex items-center gap-2 text-xs cursor-pointer py-1"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() =>
+                                      setTradeOfferProps((prev) =>
+                                        checked
+                                          ? prev.filter(
+                                              (x) => x !== pr.tileIndex
+                                            )
+                                          : [...prev, pr.tileIndex]
+                                      )
+                                    }
+                                  />
+                                  <span>
+                                    {activeTiles[pr.tileIndex]?.name} ($
+                                    {activeTiles[pr.tileIndex]?.price})
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-3">
+                          <div className="text-xs font-semibold text-emerald-400">
+                            Requested From {partner?.name}
+                          </div>
+                          <div>
+                            <label className="block text-xs text-stone-400 mb-1">
+                              Cash Requested (Max ${partner?.cash || 0})
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={partner?.cash || 0}
+                              value={tradeRequestCash}
+                              onChange={(e) =>
+                                setTradeRequestCash(
+                                  Math.max(0, Number(e.target.value))
+                                )
+                              }
+                              className="w-full px-3 py-1.5 rounded bg-[#14100E] border border-white/15 text-xs text-white tabular-nums"
+                            />
+                          </div>
+                          <div className="space-y-1 max-h-36 overflow-y-auto">
+                            <div className="text-xs text-stone-400">
+                              Select Deeds to Request:
+                            </div>
+                            {partnerProps.length === 0 && (
+                              <div className="text-xs text-stone-500 italic">
+                                Counterparty has no unimproved deeds.
+                              </div>
+                            )}
+                            {partnerProps.map((pr) => {
+                              const checked = tradeRequestProps.includes(
+                                pr.tileIndex
+                              );
+                              return (
+                                <label
+                                  key={pr.tileIndex}
+                                  className="flex items-center gap-2 text-xs cursor-pointer py-1"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() =>
+                                      setTradeRequestProps((prev) =>
+                                        checked
+                                          ? prev.filter(
+                                              (x) => x !== pr.tileIndex
+                                            )
+                                          : [...prev, pr.tileIndex]
+                                      )
+                                    }
+                                  />
+                                  <span>
+                                    {activeTiles[pr.tileIndex]?.name} ($
+                                    {activeTiles[pr.tileIndex]?.price})
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          if (!initiator || !partner) return;
+                          dispatchAction({
+                            type: 'PROPOSE_TRADE',
+                            offer: {
+                              fromPlayerId: initiator.id,
+                              toPlayerId: partner.id,
+                              offerCash: tradeOfferCash,
+                              requestCash: tradeRequestCash,
+                              offerProperties: tradeOfferProps,
+                              requestProperties: tradeRequestProps,
+                            },
+                          });
+                          setTradeOfferCash(0);
+                          setTradeRequestCash(0);
+                          setTradeOfferProps([]);
+                          setTradeRequestProps([]);
+                          setActiveModal('NONE');
+                        }}
+                        disabled={
+                          !partner ||
+                          (tradeOfferCash === 0 &&
+                            tradeRequestCash === 0 &&
+                            tradeOfferProps.length === 0 &&
+                            tradeRequestProps.length === 0)
+                        }
+                        className="w-full py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-semibold text-xs hover:bg-[#e5c247] disabled:opacity-40 transition-colors"
+                      >
+                        Transmit Official Trade Offer
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* OPTIONAL MALE/FEMALE AI HOST STUDIO */}
+            {activeModal === 'HOST' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <div className="text-xs text-[#D4AF37] font-medium">
+                      Gemini 3.8 Flash TTS & Gemini 3.8 Live Voice Showrunner
+                    </div>
+                    <h2
+                      className="text-xl font-bold"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Optional Male / Female AI Host Studio
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => setActiveModal('NONE')}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-4 p-3.5 rounded-xl bg-[#0F0C0A] border border-white/10">
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Enable AI Game Host
+                    </div>
+                    <div className="text-xs text-stone-400">
+                      Toggle spoken commentary & live voice personality on or
+                      off at any time.
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      dispatchAction({
+                        type: 'UPDATE_HOST_CONFIG',
+                        hostConfig: {
+                          enabled: !gameState.hostConfig.enabled,
+                        },
+                      })
+                    }
+                    className={`px-4 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                      gameState.hostConfig.enabled
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-stone-800 text-stone-400'
+                    }`}
+                  >
+                    {gameState.hostConfig.enabled
+                      ? 'AI Host: ENABLED'
+                      : 'AI Host: DISABLED'}
+                  </button>
+                </div>
+
+                {gameState.hostConfig.enabled && (
+                  <div className="space-y-4">
+                    {/* Gender & Voice Timbre Selector */}
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-stone-300">
+                        1. Select Host Gender & Voice Persona
+                      </label>
+                      <div className="flex gap-2 mb-2">
+                        {(['FEMALE', 'MALE'] as HostGender[]).map((g) => (
+                          <button
+                            key={g}
+                            onClick={() => {
+                              const matchingVoice =
+                                HOST_VOICES.find((v) => v.gender === g) ||
+                                HOST_VOICES[0];
+                              dispatchAction({
+                                type: 'UPDATE_HOST_CONFIG',
+                                hostConfig: {
+                                  gender: g,
+                                  voiceName: matchingVoice.voiceName,
+                                },
+                              });
+                            }}
+                            className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-colors ${
+                              gameState.hostConfig.gender === g
+                                ? 'bg-[#D4AF37] text-[#0F0C0A] border-[#D4AF37]'
+                                : 'bg-[#0F0C0A] text-stone-300 border-white/10'
+                            }`}
+                          >
+                            {g === 'FEMALE'
+                              ? 'Female AI Host Voices'
+                              : 'Male AI Host Voices'}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        {HOST_VOICES.filter(
+                          (v) => v.gender === gameState.hostConfig.gender
+                        ).map((v) => (
+                          <button
+                            key={v.voiceName}
+                            onClick={() =>
+                              dispatchAction({
+                                type: 'UPDATE_HOST_CONFIG',
+                                hostConfig: {
+                                  voiceName: v.voiceName as HostVoiceName,
+                                },
+                              })
+                            }
+                            className={`p-3 rounded-lg border text-left transition-colors ${
+                              gameState.hostConfig.voiceName === v.voiceName
+                                ? 'bg-[#D4AF37]/15 border-[#D4AF37] text-white'
+                                : 'bg-[#0F0C0A] border-white/10 text-stone-300 hover:border-white/25'
+                            }`}
+                          >
+                            <div className="text-xs font-bold">
+                              {v.label} ({v.voiceName})
+                            </div>
+                            <div className="text-[11px] text-stone-400 mt-0.5">
+                              {v.timbre}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Dynamic User-Chosen Personality Preset + Custom Prompt */}
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-stone-300">
+                        2. Choose Dynamic Host Personality
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {PERSONALITY_PRESETS.map((preset) => (
+                          <button
+                            key={preset.id}
+                            onClick={() =>
+                              dispatchAction({
+                                type: 'UPDATE_HOST_CONFIG',
+                                hostConfig: {
+                                  personalityPreset:
+                                    preset.id as PersonalityPresetId,
+                                },
+                              })
+                            }
+                            className={`p-3 rounded-lg border text-left transition-colors ${
+                              gameState.hostConfig.personalityPreset ===
+                              preset.id
+                                ? 'bg-[#D4AF37]/15 border-[#D4AF37] text-white'
+                                : 'bg-[#0F0C0A] border-white/10 text-stone-300 hover:border-white/25'
+                            }`}
+                          >
+                            <div className="text-xs font-bold">
+                              {preset.name}
+                            </div>
+                            <div className="text-[11px] text-stone-400 mt-0.5">
+                              {preset.tagline}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-300 mb-1">
+                        3. Custom Personality Direction / Backstory (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={gameState.hostConfig.customPersonalityPrompt}
+                        onChange={(e) =>
+                          dispatchAction({
+                            type: 'UPDATE_HOST_CONFIG',
+                            hostConfig: {
+                              customPersonalityPrompt: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder="e.g., Speak like a dramatic 1920s Art Deco railway tycoon who loves Mayfair..."
+                        className="w-full px-3 py-2 rounded-lg bg-[#0F0C0A] border border-white/15 text-xs text-white placeholder:text-stone-500 focus:outline-none focus:border-[#D4AF37]"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                      <button
+                        onClick={() =>
+                          triggerHostCommentary(
+                            `Introduce yourself as the AI Host of Grand Estates 3D and comment on the current game state: ${boardContextSummary}`
+                          )
+                        }
+                        disabled={isSynthesizingTts}
+                        className="flex-1 py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-semibold text-xs hover:bg-[#e5c247] disabled:opacity-50 transition-colors"
+                      >
+                        {isSynthesizingTts
+                          ? 'Synthesizing Gemini 3.8 Flash TTS...'
+                          : 'Test AI Host Voice Commentary'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowLiveVoice(true);
+                          setActiveModal('NONE');
+                        }}
+                        className="py-2.5 px-4 rounded-lg bg-emerald-700 text-white font-semibold text-xs hover:bg-emerald-600 transition-colors flex items-center gap-1.5"
+                      >
+                        <Mic className="w-4 h-4" />
+                        Open Live Voice Chat
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* MULTIPLAYER, BOARD SIZES & PASS-AND-PLAY LOBBY */}
+            {activeModal === 'LOBBY' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <div className="text-xs text-[#D4AF37] font-medium">
+                      5 Board Sizes (24 to 84 Spaces) · Up to 16 Players · Turn
+                      Pacing
+                    </div>
+                    <h2
+                      className="text-xl font-bold"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Grand Estates Match Lobby & Board Architect
+                    </h2>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setActiveModal('NONE');
+                        setAppPhase('START_MENU');
+                      }}
+                      className="px-2.5 py-1 rounded bg-stone-800 text-xs text-stone-200 hover:bg-stone-700"
+                    >
+                      Start Menu
+                    </button>
+                    <button
+                      onClick={() => setActiveModal('NONE')}
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 1. Board Size Selector with Recommended Player Sizes Across It (Up to 16 Players) */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-stone-200 flex items-center gap-1.5">
+                      <Layers className="w-4 h-4 text-[#D4AF37]" />
+                      <span>
+                        1. Select Board Size (Up to 16 Players Across 5 Scales)
+                      </span>
+                    </label>
+                    <button
+                      onClick={() =>
+                        handleSelectDraftBoardSize(draftBoardSize, true)
+                      }
+                      className="text-[11px] font-semibold text-[#D4AF37] hover:underline"
+                    >
+                      Auto-Populate Recommended Players (
+                      {BOARD_SIZE_CONFIGS[draftBoardSize].defaultPlayerCount}P)
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+                    {(
+                      [
+                        'MINI',
+                        'CLASSIC',
+                        'MEGA',
+                        'CONTINENTAL',
+                        'COLOSSAL',
+                      ] as BoardSizeId[]
+                    ).map((sizeId) => {
+                      const cfg = BOARD_SIZE_CONFIGS[sizeId];
+                      const isSelected = draftBoardSize === sizeId;
+                      return (
+                        <button
+                          key={sizeId}
+                          onClick={() =>
+                            handleSelectDraftBoardSize(sizeId, true)
+                          }
+                          className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between space-y-1.5 ${
+                            isSelected
+                              ? 'bg-[#D4AF37]/15 border-[#D4AF37] text-white shadow-lg'
+                              : 'bg-[#0F0C0A] border-white/10 text-stone-300 hover:border-white/30'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="text-xs font-bold text-white">
+                              {cfg.shortLabel}
+                            </div>
+                            <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] text-[10px] font-bold">
+                              <Users className="w-3 h-3" />
+                              <span>{cfg.recommendedPlayers}</span>
+                            </div>
+                            <p className="text-[10px] text-stone-400 leading-snug">
+                              Max {cfg.maxAllowedPlayers}P · $
+                              {cfg.startingCash}
+                            </p>
+                          </div>
+
+                          <div className="pt-1 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-stone-300">
+                            <span>
+                              {cfg.gridDimension}×{cfg.gridDimension}
+                            </span>
+                            <span>{cfg.estimatedDuration}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. Turn-Time Limit Configuration */}
+                <div className="p-3 rounded-xl bg-[#0F0C0A] border border-white/10 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-[#D4AF37]" />
+                      <span>2. Turn-Time Limit Pacing</span>
+                    </div>
+                    <div className="text-[11px] text-stone-400">
+                      Automatically dispatches End Turn when the turn countdown
+                      reaches zero.
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      [30, '30s Blitz'],
+                      [60, '60s Standard'],
+                      [90, '90s Relaxed'],
+                      [0, 'Unlimited'],
+                    ].map(([sec, label]) => (
+                      <button
+                        key={String(sec)}
+                        onClick={() => {
+                          setDraftTurnLimit(Number(sec));
+                          dispatchAction({
+                            type: 'SET_TURN_TIME_LIMIT',
+                            seconds: Number(sec),
+                          });
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          draftTurnLimit === Number(sec)
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'bg-[#14100E] text-stone-300 border border-white/10 hover:text-white'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Mode Switcher (Local vs Online) */}
+                <div className="flex gap-2 p-1 bg-[#0F0C0A] rounded-lg border border-white/10">
+                  <button
+                    onClick={() => setSetupMode('LOCAL')}
+                    className={`flex-1 py-2 px-3 rounded-md text-xs font-semibold transition-colors ${
+                      setupMode === 'LOCAL'
+                        ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                        : 'text-stone-300 hover:text-white'
+                    }`}
+                  >
+                    Local Table (Pass-and-Play + AI Bots · 2–16 Players)
+                  </button>
+                  <button
+                    onClick={() => setSetupMode('ONLINE')}
+                    className={`flex-1 py-2 px-3 rounded-md text-xs font-semibold transition-colors ${
+                      setupMode === 'ONLINE'
+                        ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                        : 'text-stone-300 hover:text-white'
+                    }`}
+                  >
+                    Online Real-Time Multiplayer Room
+                  </button>
+                </div>
+
+                {setupMode === 'LOCAL' ? (
+                  <div className="space-y-3">
+                    {(() => {
+                      const cfg = BOARD_SIZE_CONFIGS[draftBoardSize];
+                      const count = localDraftPlayers.length;
+                      const isOptimal =
+                        count >= cfg.recommendedMinPlayers &&
+                        count <= cfg.recommendedMaxPlayers;
+                      return (
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-stone-300 font-semibold">
+                              3. Contenders ({count} of {cfg.maxAllowedPlayers}{' '}
+                              Max)
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                                isOptimal
+                                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                                  : 'bg-amber-950 text-amber-300 border border-amber-500/40'
+                              }`}
+                            >
+                              {isOptimal
+                                ? `Optimal for ${cfg.shortLabel} (${cfg.recommendedPlayers})`
+                                : `${cfg.shortLabel} ${cfg.recommendedPlayers}`}
+                            </span>
+                          </div>
+                          {localDraftPlayers.length < cfg.maxAllowedPlayers && (
+                            <button
+                              onClick={() => {
+                                const nextIdx = localDraftPlayers.length;
+                                const arch =
+                                  TOKEN_ARCHETYPES[
+                                    nextIdx % TOKEN_ARCHETYPES.length
+                                  ];
+                                const color =
+                                  PLAYER_PALETTE[
+                                    nextIdx % PLAYER_PALETTE.length
+                                  ];
+                                setLocalDraftPlayers((prev) => [
+                                  ...prev,
+                                  {
+                                    id: `draft-${Date.now()}-${nextIdx}`,
+                                    name:
+                                      CONTENDER_NAMES[nextIdx] ||
+                                      `Contender ${nextIdx + 1}`,
+                                    isBot: true,
+                                    token: arch.id,
+                                    color,
+                                    cash: cfg.startingCash,
+                                    position: 0,
+                                    inJail: false,
+                                    jailTurns: 0,
+                                    getOutOfJailCards: 0,
+                                    bankrupt: false,
+                                    connected: true,
+                                  },
+                                ]);
+                              }}
+                              className="px-3 py-1 rounded bg-stone-800 text-xs text-[#D4AF37] font-semibold hover:bg-stone-700"
+                            >
+                              + Add Player / Bot
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
+                      {localDraftPlayers.map((p, idx) => (
+                        <div
+                          key={p.id}
+                          className="flex items-center gap-2 p-2 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs"
+                        >
+                          <span
+                            className="w-3 h-3 rounded-sm shrink-0"
+                            style={{ backgroundColor: p.color }}
+                          />
+                          <input
+                            type="text"
+                            value={p.name}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setLocalDraftPlayers((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, name: val } : item
+                                )
+                              );
+                            }}
+                            className="flex-1 min-w-[110px] px-2 py-1 rounded bg-[#14100E] border border-white/15 text-white"
+                          />
+                          <select
+                            value={p.token}
+                            onChange={(e) => {
+                              const newToken = e.target.value as TokenArchetype;
+                              setLocalDraftPlayers((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx
+                                    ? {
+                                        ...item,
+                                        token: newToken,
+                                      }
+                                    : item
+                                )
+                              );
+                            }}
+                            className="px-2 py-1 rounded bg-[#14100E] border border-white/15 text-stone-200 text-[11px]"
+                          >
+                            {TOKEN_ARCHETYPES.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() =>
+                              setLocalDraftPlayers((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx
+                                    ? { ...item, isBot: !item.isBot }
+                                    : item
+                                )
+                              )
+                            }
+                            className={`px-2 py-1 rounded font-semibold text-[11px] ${
+                              p.isBot
+                                ? 'bg-purple-950/90 text-purple-200 border border-purple-500/30'
+                                : 'bg-emerald-950/90 text-emerald-200 border border-emerald-500/30'
+                            }`}
+                          >
+                            {p.isBot ? 'Bot' : 'Human'}
+                          </button>
+                          {localDraftPlayers.length > 2 && (
+                            <button
+                              onClick={() =>
+                                setLocalDraftPlayers((prev) =>
+                                  prev.filter((_, i) => i !== idx)
+                                )
+                              }
+                              className="p-1 text-stone-400 hover:text-red-400"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={handleStartLocalMatch}
+                      className="w-full py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-bold text-xs hover:bg-[#e5c247] transition-colors"
+                    >
+                      Launch {BOARD_SIZE_CONFIGS[draftBoardSize].name} (
+                      {localDraftPlayers.length} Players)
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setOnlineAction('CREATE')}
+                        className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border ${
+                          onlineAction === 'CREATE'
+                            ? 'bg-[#D4AF37]/20 border-[#D4AF37] text-white'
+                            : 'bg-[#0F0C0A] border-white/10 text-stone-400'
+                        }`}
+                      >
+                        Create New Room Code
+                      </button>
+                      <button
+                        onClick={() => setOnlineAction('JOIN')}
+                        className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border ${
+                          onlineAction === 'JOIN'
+                            ? 'bg-[#D4AF37]/20 border-[#D4AF37] text-white'
+                            : 'bg-[#0F0C0A] border-white/10 text-stone-400'
+                        }`}
+                      >
+                        Join Existing 6-Char Code
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label className="block text-stone-400 mb-1">
+                          Your Display Name
+                        </label>
+                        <input
+                          type="text"
+                          value={onlinePlayerName}
+                          onChange={(e) => setOnlinePlayerName(e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg bg-[#0F0C0A] border border-white/15 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-stone-400 mb-1">
+                          Your 3D Sculpted Token
+                        </label>
+                        <select
+                          value={onlinePlayerToken}
+                          onChange={(e) =>
+                            setOnlinePlayerToken(
+                              e.target.value as TokenArchetype
+                            )
+                          }
+                          className="w-full px-3 py-2 rounded-lg bg-[#0F0C0A] border border-white/15 text-white"
+                        >
+                          {TOKEN_ARCHETYPES.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {onlineAction === 'CREATE' ? (
+                      <div>
+                        <label className="block text-xs text-stone-400 mb-1">
+                          Include AI Bot Contenders in Online Room (0–
+                          {BOARD_SIZE_CONFIGS[draftBoardSize]
+                            .maxAllowedPlayers - 1}{' '}
+                          ·{' '}
+                          {
+                            BOARD_SIZE_CONFIGS[draftBoardSize]
+                              .recommendedPlayers
+                          }
+                          )
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={
+                            BOARD_SIZE_CONFIGS[draftBoardSize]
+                              .maxAllowedPlayers - 1
+                          }
+                          value={onlineBotCount}
+                          onChange={(e) =>
+                            setOnlineBotCount(
+                              Math.max(
+                                0,
+                                Math.min(
+                                  BOARD_SIZE_CONFIGS[draftBoardSize]
+                                    .maxAllowedPlayers - 1,
+                                  Number(e.target.value)
+                                )
+                              )
+                            )
+                          }
+                          className="w-32 px-3 py-1.5 rounded-lg bg-[#0F0C0A] border border-white/15 text-xs text-white"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-xs text-stone-400 mb-1">
+                          Enter 6-Character Room Invite Code
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          value={joinRoomCodeInput}
+                          onChange={(e) =>
+                            setJoinRoomCodeInput(e.target.value.toUpperCase())
+                          }
+                          placeholder="e.g. K9X4M2"
+                          className="w-48 px-3 py-2 rounded-lg bg-[#0F0C0A] border border-[#D4AF37]/50 text-sm font-mono uppercase text-[#D4AF37]"
+                        />
+                      </div>
+                    )}
+
+                    {roomError && (
+                      <p className="text-xs text-red-400">{roomError}</p>
+                    )}
+
+                    <button
+                      onClick={handleConnectOnlineRoom}
+                      className="w-full py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-bold text-xs hover:bg-[#e5c247] transition-colors"
+                    >
+                      {onlineAction === 'CREATE'
+                        ? `Launch Online ${BOARD_SIZE_CONFIGS[draftBoardSize].shortLabel} Room`
+                        : 'Join Multiplayer Room Now'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 8. Live Voice Conversation Floating Studio (gemini-3.8-live) */}
+      {showLiveVoice && (
+        <LiveVoicePanel
+          hostConfig={gameState.hostConfig}
+          boardContext={boardContextSummary}
+          onClose={() => setShowLiveVoice(false)}
+        />
+      )}
+
+      {/* 9. Unified Collapsible Bottom Control Dock (Zero Viewport Occlusion, <= 15% height) */}
+      <section
+        aria-label="Game Control Dock"
+        className={`fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[96vw] max-w-[1040px] transition-transform duration-200 ${
+          dockCollapsed ? 'translate-y-[calc(100%-28px)]' : 'translate-y-0'
+        }`}
+      >
+        {/* Collapse / Expand Zen Mode Toggle Tab */}
+        <div className="flex justify-center">
+          <button
+            onClick={() => setDockCollapsed((c) => !c)}
+            className="px-4 py-1 rounded-t-lg bg-[#14100E] border-t border-x border-[#D4AF37]/30 text-[11px] font-medium text-stone-300 hover:text-[#D4AF37] flex items-center gap-1.5"
+          >
+            {dockCollapsed ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5" /> Show Controls (H)
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5" /> Hide Controls (H)
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Main Dock Body (Solid dark surface — zero backdrop-filter over WebGL) */}
+        <div className="rounded-xl bg-[#14100E] border border-[#D4AF37]/35 shadow-2xl px-4 py-2.5 text-[#FAF6F0] space-y-2">
+          {/* Row 1: Player Standings Strip + Board Size Badge + Active Macro Event Metadata */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-white/10 text-xs">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {gameState.mode === 'ONLINE' && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(gameState.roomCode);
+                    setCopiedCode(true);
+                    setTimeout(() => setCopiedCode(false), 2000);
+                  }}
+                  className="flex items-center gap-1 text-[#D4AF37] font-mono hover:underline"
+                  title="Copy 6-character Room Code"
+                >
+                  <span>Room #{gameState.roomCode}</span>
+                  {copiedCode ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  <span aria-hidden="true">·</span>
+                </button>
+              )}
+
+              {gameState.players.map((p, idx) => {
+                const isTurn = idx === gameState.turnIndex;
+                return (
+                  <div
+                    key={p.id}
+                    className={`flex items-center gap-1.5 tabular-nums ${
+                      p.bankrupt
+                        ? 'opacity-40 line-through'
+                        : isTurn
+                        ? 'text-white font-bold'
+                        : 'text-stone-400'
+                    }`}
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-xs shrink-0"
+                      style={{ backgroundColor: p.color }}
+                    />
+                    <span className="truncate max-w-[100px]">{p.name}</span>
+                    <span
+                      className="text-[#D4AF37]"
+                      style={{ fontFamily: 'var(--font-mono), monospace' }}
+                    >
+                      ${p.cash}
+                    </span>
+                    {idx < gameState.players.length - 1 && (
+                      <span aria-hidden="true" className="text-stone-600 pl-0.5">
+                        ·
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] text-stone-400 tabular-nums">
+              <button
+                onClick={() => setActiveModal('LOBBY')}
+                className="px-2 py-0.5 rounded bg-[#0F0C0A] border border-white/10 text-stone-300 hover:border-[#D4AF37] hover:text-[#D4AF37]"
+                title={`${activeBoardConfig.name} (${activeBoardConfig.recommendedPlayers})`}
+              >
+                {activeBoardConfig.shortLabel} (
+                {activeBoardConfig.recommendedMinPlayers}–
+                {activeBoardConfig.recommendedMaxPlayers}P)
+              </button>
+              <span>·</span>
+              {gameState.activeGlobalEvent ? (
+                <button
+                  onClick={() => setActiveModal('EVENTS')}
+                  className="text-[#D4AF37] hover:underline font-medium"
+                >
+                  Event: {gameState.activeGlobalEvent.event.title} (
+                  {gameState.activeGlobalEvent.remainingTurns}T)
+                </button>
+              ) : (
+                <button
+                  onClick={() => setActiveModal('EVENTS')}
+                  className="hover:text-[#D4AF37]"
+                >
+                  Next Event: {gameState.turnsUntilNextEvent}T
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Row 2: Primary Turn Action Controls + Visual Turn Timer + 2D/3D/Top-Down View Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            {/* Left: Dice + Visual Turn Countdown Timer + Primary Turn Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs tabular-nums"
+                style={{ fontFamily: 'var(--font-mono), monospace' }}
+              >
+                <Dices className="w-4 h-4 text-[#D4AF37]" />
+                <span>
+                  {gameState.dice[0]}+{gameState.dice[1]}=
+                  {gameState.dice[0] + gameState.dice[1]}
+                </span>
+              </div>
+
+              {/* Visual Countdown Timer in Control Dock */}
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#0F0C0A] border border-white/10">
+                <Clock
+                  className={`w-3.5 h-3.5 ${
+                    remainingSeconds !== null && remainingSeconds <= 10
+                      ? 'text-red-400'
+                      : 'text-[#D4AF37]'
+                  }`}
+                />
+                {gameState.turnTimeLimitSeconds > 0 &&
+                remainingSeconds !== null ? (
+                  <div className="flex flex-col min-w-[68px]">
+                    <div className="flex items-center justify-between text-[11px] font-mono font-bold tabular-nums">
+                      <span
+                        className={
+                          remainingSeconds <= 10
+                            ? 'text-red-400'
+                            : remainingSeconds <= 20
+                            ? 'text-amber-300'
+                            : 'text-[#FAF6F0]'
+                        }
+                      >
+                        {remainingSeconds}s
+                        {remainingSeconds <= 10 ? ' !' : ''}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const cycle = [60, 30, 90, 0];
+                          const next =
+                            cycle[
+                              (cycle.indexOf(gameState.turnTimeLimitSeconds) +
+                                1) %
+                                cycle.length
+                            ] ?? 60;
+                          setDraftTurnLimit(next);
+                          dispatchAction({
+                            type: 'SET_TURN_TIME_LIMIT',
+                            seconds: next,
+                          });
+                        }}
+                        className="text-[10px] text-stone-400 hover:text-[#D4AF37] ml-1"
+                        title="Click to cycle Turn Timer (60s / 30s / 90s / Off)"
+                      >
+                        /{gameState.turnTimeLimitSeconds}s
+                      </button>
+                    </div>
+                    <div className="w-full h-1 bg-stone-800 rounded-full overflow-hidden mt-0.5">
+                      <div
+                        className={`h-full transition-all duration-200 ${
+                          remainingSeconds <= 10
+                            ? 'bg-red-500'
+                            : remainingSeconds <= 20
+                            ? 'bg-amber-400'
+                            : 'bg-[#D4AF37]'
+                        }`}
+                        style={{ width: `${timerProgressPct}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setDraftTurnLimit(60);
+                      dispatchAction({
+                        type: 'SET_TURN_TIME_LIMIT',
+                        seconds: 60,
+                      });
+                    }}
+                    className="text-[11px] font-mono text-stone-400 hover:text-[#D4AF37]"
+                    title="Enable 60s Turn Timer"
+                  >
+                    Timer: Off
+                  </button>
+                )}
+              </div>
+
+              {gameState.status === 'GAME_OVER' ? (
+                <button
+                  onClick={() => setActiveModal('LOBBY')}
+                  className="px-4 py-2 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-bold"
+                >
+                  Match Complete · Play Again
+                </button>
+              ) : isMyTurn ? (
+                <>
+                  {gameState.phase === 'ROLL' && (
+                    <>
+                      <button
+                        onClick={() => dispatchAction({ type: 'ROLL_DICE' })}
+                        className="px-3.5 py-2 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-bold hover:bg-[#e5c247] transition-colors whitespace-nowrap"
+                      >
+                        Roll Dice ({currentPlayer?.name.split(' ')[0]})
+                      </button>
+                      {currentPlayer?.inJail && (
+                        <>
+                          <button
+                            onClick={() =>
+                              dispatchAction({ type: 'PAY_JAIL_BAIL' })
+                            }
+                            disabled={currentPlayer.cash < 50}
+                            className="px-3 py-2 rounded-lg bg-stone-800 text-xs font-semibold text-stone-200 hover:bg-stone-700 disabled:opacity-40 whitespace-nowrap"
+                          >
+                            Bail $50
+                          </button>
+                          {currentPlayer.getOutOfJailCards > 0 && (
+                            <button
+                              onClick={() =>
+                                dispatchAction({ type: 'USE_JAIL_CARD' })
+                              }
+                              className="px-3 py-2 rounded-lg bg-emerald-800 text-xs font-semibold text-white whitespace-nowrap"
+                            >
+                              Use Pass
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {gameState.phase === 'ACTION' && (
+                    <>
+                      <button
+                        onClick={() => dispatchAction({ type: 'BUY_PROPERTY' })}
+                        disabled={currentPlayer.cash < currentEffectivePrice}
+                        className="px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 disabled:opacity-40 transition-colors whitespace-nowrap"
+                      >
+                        Buy {currentTile.shortName} (${currentEffectivePrice})
+                      </button>
+                      <button
+                        onClick={() =>
+                          dispatchAction({ type: 'DECLINE_PROPERTY' })
+                        }
+                        className="px-3 py-2 rounded-lg bg-stone-800 border border-[#D4AF37]/40 text-[#D4AF37] text-xs font-semibold hover:bg-stone-700 transition-colors whitespace-nowrap"
+                      >
+                        Auction
+                      </button>
+                    </>
+                  )}
+
+                  {gameState.phase === 'END_TURN' && (
+                    <button
+                      onClick={() => dispatchAction({ type: 'END_TURN' })}
+                      className="px-3.5 py-2 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-bold hover:bg-[#e5c247] transition-colors whitespace-nowrap"
+                    >
+                      {gameState.lastRollWasDoubles
+                        ? 'Roll Again (Doubles!)'
+                        : 'End Turn →'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="text-xs text-stone-300 px-1.5">
+                  Waiting for{' '}
+                  <strong className="text-[#D4AF37]">
+                    {currentPlayer?.name}
+                  </strong>
+                  ...
+                </div>
+              )}
+
+              {/* Quick Inspect Current Tile Deed & Google Search */}
+              <button
+                onClick={() => {
+                  setSelectedTileIndex(currentPlayer?.position || 0);
+                  setActiveModal('DEED');
+                }}
+                className="px-2.5 py-2 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs text-stone-200 hover:border-[#D4AF37]/50 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
+                <span>Inspect {currentTile.shortName}</span>
+              </button>
+            </div>
+
+            {/* Right: 2D Easy-Read Toggle + 3D Camera Presets + AI Host & Audio Controls */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Dedicated 2D Crisp Board Toggle */}
+              <button
+                onClick={() =>
+                  setViewMode((prev) => (prev === '2D' ? '3D' : '2D'))
+                }
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  viewMode === '2D'
+                    ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                    : 'bg-[#0F0C0A] text-[#D4AF37] border border-[#D4AF37]/50 hover:bg-[#D4AF37]/15'
+                }`}
+                title="Switch to 2D High-Contrast Board for effortless reading"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>{viewMode === '2D' ? '2D Active' : '2D Board'}</span>
+              </button>
+
+              {(
+                [
+                  ['OVERVIEW', '3D Angle'],
+                  ['TOP_DOWN', '3D Top-Down'],
+                  ['FOLLOW_TOKEN', 'Follow'],
+                ] as [CameraPreset, string][]
+              ).map(([preset, label]) => (
+                <button
+                  key={preset}
+                  onClick={() => {
+                    setViewMode('3D');
+                    setCameraPreset(preset);
+                  }}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors whitespace-nowrap ${
+                    viewMode === '3D' && cameraPreset === preset
+                      ? 'bg-[#D4AF37] text-[#0F0C0A] font-semibold'
+                      : 'bg-[#0F0C0A] text-stone-300 hover:text-white border border-white/10'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+
+              <button
+                onClick={() => setShowLiveVoice((v) => !v)}
+                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1 whitespace-nowrap ${
+                  showLiveVoice
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-[#0F0C0A] text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-[#D4AF37]/15'
+                }`}
+                title="Real-time voice conversation with AI Host (gemini-3.8-live)"
+              >
+                <Mic className="w-3.5 h-3.5" />
+                <span>Live Voice</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  const next = !sfxMuted;
+                  setSfxMuted(next);
+                  soundFX.muted = next;
+                  if (next && currentAudioRef.current) {
+                    currentAudioRef.current.pause();
+                  }
+                }}
+                className="p-1.5 rounded-lg bg-[#0F0C0A] border border-white/10 text-stone-300 hover:text-white"
+                aria-label={sfxMuted ? 'Unmute Audio' : 'Mute Audio'}
+              >
+                {sfxMuted ? (
+                  <VolumeX className="w-4 h-4 text-red-400" />
+                ) : (
+                  <Volume2 className="w-4 h-4 text-[#D4AF37]" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Row 3: Compact AI Host Broadcast Ticker & Event Log Line */}
+          <div className="flex items-center justify-between gap-4 pt-1 border-t border-white/10 text-[11px] text-stone-300">
+            <div className="truncate">
+              {gameState.hostConfig.enabled ? (
+                <span>
+                  <strong className="text-[#D4AF37]">
+                    AI Host ({gameState.hostConfig.voiceName}):
+                  </strong>{' '}
+                  {hostTranscript}
+                </span>
+              ) : (
+                <span>
+                  <strong className="text-stone-400">Board Log:</strong>{' '}
+                  {gameState.logs[0]?.text}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setActiveModal('HOST')}
+              className="text-stone-400 hover:text-[#D4AF37] shrink-0 whitespace-nowrap"
+            >
+              {gameState.hostConfig.enabled
+                ? `${gameState.hostConfig.gender} · Customize Host`
+                : 'AI Host Off · Enable'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}

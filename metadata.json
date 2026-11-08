@@ -1,0 +1,6 @@
+{
+  "name": "Grand Estates 3D — Luxury Landmark Monopoly",
+  "description": "A multiplayer-capable 3D Monopoly web game built with Three.js featuring real-world city landmarks, online rooms & pass-and-play bots, and an optional Male/Female AI Host with dynamic personalities, TTS commentary, Live voice chat, and Google Search trivia.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
