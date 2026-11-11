@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   Building2,
   Clock,
@@ -83,12 +84,66 @@ export default function MonopolyBoard2D({
 }: MonopolyBoard2DProps) {
   const [hoveredTileIndex, setHoveredTileIndex] = useState<number | null>(null);
   const [zoomedMode, setZoomedMode] = useState<boolean>(false);
+  const [visualPositions, setVisualPositions] = useState<
+    Record<string, number>
+  >({});
 
   const boardConfig =
     BOARD_SIZE_CONFIGS[gameState.boardSize] || BOARD_SIZE_CONFIGS.CLASSIC;
   const tiles = getBoardTiles(gameState.boardSize);
   const sideLength = boardConfig.sideLength;
   const gridDim = boardConfig.gridDimension; // 7, 11, or 14
+
+  // Step 2D tokens tile-by-tile around the perimeter when player positions advance
+  useEffect(() => {
+    const total = tiles.length;
+    if (total === 0) return;
+
+    const needsStep = gameState.players.some((p) => {
+      if (p.bankrupt) return false;
+      const vis = visualPositions[p.id];
+      return vis !== undefined && vis !== p.position;
+    });
+
+    const missingInit = gameState.players.some(
+      (p) => !p.bankrupt && visualPositions[p.id] === undefined
+    );
+
+    if (missingInit && !needsStep) {
+      const timer = setTimeout(() => {
+        setVisualPositions((prev) => {
+          const next = { ...prev };
+          for (const p of gameState.players) {
+            if (!p.bankrupt && next[p.id] === undefined) {
+              next[p.id] = p.position;
+            }
+          }
+          return next;
+        });
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+
+    if (!needsStep) return;
+
+    const stepTimer = setTimeout(() => {
+      setVisualPositions((prev) => {
+        const next = { ...prev };
+        for (const p of gameState.players) {
+          if (p.bankrupt) continue;
+          const cur = next[p.id] ?? p.position;
+          if (cur !== p.position) {
+            const dist = (p.position - cur + total) % total;
+            // Hop tile-by-tile for normal rolls (<= 16 spaces), or jump directly for Detention
+            next[p.id] = dist > 0 && dist <= 16 ? (cur + 1) % total : p.position;
+          }
+        }
+        return next;
+      });
+    }, 95);
+
+    return () => clearTimeout(stepTimer);
+  }, [gameState.players, tiles.length, visualPositions]);
 
   const currentPlayer =
     gameState.players[gameState.turnIndex] || gameState.players[0];
@@ -143,14 +198,14 @@ export default function MonopolyBoard2D({
             className="px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-500/35 text-emerald-300 font-semibold flex items-center gap-1.5"
             title="Tiles with at least one active player are highlighted with a warm gold glow and player beacon"
           >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
             <span>
               Occupied Spaces:{' '}
               {
                 new Set(
                   gameState.players
                     .filter((p) => !p.bankrupt)
-                    .map((p) => p.position)
+                    .map((p) => visualPositions[p.id] ?? p.position)
                 ).size
               }
             </span>
@@ -251,7 +306,7 @@ export default function MonopolyBoard2D({
             ? gameState.players.find((p) => p.id === prop.ownerId)
             : null;
           const occupants = gameState.players.filter(
-            (p) => !p.bankrupt && p.position === tile.index
+            (p) => !p.bankrupt && (visualPositions[p.id] ?? p.position) === tile.index
           );
           const isOccupied = occupants.length > 0;
           const hasActiveTurnPlayer = occupants.some(
@@ -402,9 +457,19 @@ export default function MonopolyBoard2D({
                       {prop?.mortgaged ? 'MORTGAGED' : owner.name.split(' ')[0]}
                     </span>
                     {prop && prop.houses > 0 && (
-                      <span className="px-1 rounded-xs bg-black/80 text-[#D4AF37] font-mono">
+                      <motion.span
+                        key={`${tile.index}-h-${prop.houses}`}
+                        initial={{ scale: 0.3, y: -4 }}
+                        animate={{ scale: 1, y: 0 }}
+                        transition={{
+                          type: 'spring',
+                          stiffness: 420,
+                          damping: 18,
+                        }}
+                        className="px-1 rounded-xs bg-black/80 text-[#D4AF37] font-mono"
+                      >
                         {prop.houses === 5 ? 'HOTEL' : `${prop.houses}V`}
-                      </span>
+                      </motion.span>
                     )}
                   </div>
                 )}
@@ -437,14 +502,24 @@ export default function MonopolyBoard2D({
                     </span>
                   )}
 
-                  {/* Player Token Badges on this Tile */}
-                  {occupants.length > 0 && (
-                    <div className="flex items-center -space-x-1">
+                  {/* Animated Player Token Badges on this Tile (hops tile-by-tile with layoutId!) */}
+                  <div className="flex items-center -space-x-1">
+                    <AnimatePresence mode="popLayout">
                       {occupants.map((p) => {
                         const isActivePlayer = p.id === currentPlayer?.id;
                         return (
-                          <span
+                          <motion.span
+                            layout
+                            layoutId={`token-2d-${p.id}`}
                             key={p.id}
+                            initial={{ scale: 0.4, y: -8, opacity: 0 }}
+                            animate={{ scale: 1, y: 0, opacity: 1 }}
+                            exit={{ scale: 0, rotate: 160, opacity: 0 }}
+                            transition={{
+                              type: 'spring',
+                              stiffness: 380,
+                              damping: 22,
+                            }}
                             title={`${p.name} ($${p.cash})`}
                             className={`inline-flex items-center justify-center w-4 h-4 md:w-5 md:h-5 rounded-full text-[9px] font-extrabold text-[#0F0C0A] border ${
                               isActivePlayer
@@ -454,11 +529,11 @@ export default function MonopolyBoard2D({
                             style={{ backgroundColor: p.color }}
                           >
                             {p.name.slice(0, 2).toUpperCase()}
-                          </span>
+                          </motion.span>
                         );
                       })}
-                    </div>
-                  )}
+                    </AnimatePresence>
+                  </div>
                 </div>
               </div>
             </div>
@@ -672,11 +747,46 @@ export default function MonopolyBoard2D({
                   <span className="text-xs font-semibold text-[#D4AF37]">
                     Active Turn Command
                   </span>
-                  <span className="font-mono text-xs text-stone-300 bg-[#0F0C0A] px-2.5 py-1 rounded border border-white/10 flex items-center gap-1.5">
-                    <Dices className="w-3.5 h-3.5 text-[#D4AF37]" />
-                    {gameState.dice[0]} + {gameState.dice[1]} ={' '}
-                    {gameState.dice[0] + gameState.dice[1]}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <motion.div
+                      key={`die1-${gameState.logs[0]?.id}-${gameState.dice[0]}`}
+                      initial={{ rotate: -180, scale: 0.6, y: -10 }}
+                      animate={{
+                        rotate: gameState.phase === 'ROLL' ? [0, -8, 8, 0] : 0,
+                        scale: 1,
+                        y: 0,
+                      }}
+                      transition={{
+                        type: 'spring',
+                        stiffness: 340,
+                        damping: 18,
+                      }}
+                      className="w-7 h-7 rounded-md bg-[#FAF6F0] border-2 border-[#D4AF37] text-[#0F0C0A] font-mono font-extrabold text-xs flex items-center justify-center shadow"
+                    >
+                      {gameState.dice[0]}
+                    </motion.div>
+                    <motion.div
+                      key={`die2-${gameState.logs[0]?.id}-${gameState.dice[1]}`}
+                      initial={{ rotate: 180, scale: 0.6, y: -10 }}
+                      animate={{
+                        rotate: gameState.phase === 'ROLL' ? [0, 8, -8, 0] : 0,
+                        scale: 1,
+                        y: 0,
+                      }}
+                      transition={{
+                        type: 'spring',
+                        stiffness: 340,
+                        damping: 18,
+                      }}
+                      className="w-7 h-7 rounded-md bg-[#FAF6F0] border-2 border-[#D4AF37] text-[#0F0C0A] font-mono font-extrabold text-xs flex items-center justify-center shadow"
+                    >
+                      {gameState.dice[1]}
+                    </motion.div>
+                    <span className="font-mono text-xs font-bold text-[#D4AF37] bg-[#0F0C0A] px-2 py-1 rounded border border-white/10 flex items-center gap-1">
+                      <Dices className="w-3.5 h-3.5 text-[#D4AF37]" />=
+                      {gameState.dice[0] + gameState.dice[1]}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="p-2.5 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs space-y-1">

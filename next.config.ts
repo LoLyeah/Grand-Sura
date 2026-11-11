@@ -1,8 +1,6 @@
 import type { NextConfig } from 'next';
-import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
 
-const nextConfig = (phase: string): NextConfig => ({
-  distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next',
+const nextConfig: NextConfig = {
   reactStrictMode: true,
   eslint: {
     ignoreDuringBuilds: true,
@@ -33,7 +31,8 @@ const nextConfig = (phase: string): NextConfig => ({
     }
     return config;
   },
-});
+};
 
 export default nextConfig;
+
 

@@ -49,6 +49,8 @@ export default function MonopolyBoard3D({
 }: MonopolyBoard3DProps) {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const labelNodesRef = useRef<(HTMLButtonElement | null)[]>([]);
+  const diceBadgeRef = useRef<HTMLDivElement | null>(null);
+  const lastRollLogIdRef = useRef<string | null>(null);
   const [hoveredTileIdx, setHoveredTileIdx] = React.useState<number | null>(
     null
   );
@@ -97,11 +99,30 @@ export default function MonopolyBoard3D({
     tileOwnerSignatures: string[];
     tokenGroups: Map<string, THREE.Group>;
     tokenTargetPos: Map<string, THREE.Vector3>;
+    tokenVisualTile: Map<string, number>;
+    tokenTargetTile: Map<string, number>;
+    tokenStepProgress: Map<string, number>;
+    bankruptExitTokens: Map<
+      string,
+      {
+        group: THREE.Group;
+        ring: THREE.Mesh;
+        progress: number;
+        startPos: THREE.Vector3;
+      }
+    >;
     buildingGroups: Map<number, THREE.Group>;
     buildingCounts: Map<number, number>;
+    buildingSpawnAnim: Map<number, number>;
     selectionRing: THREE.Mesh | null;
     diceMeshes: [THREE.Mesh, THREE.Mesh] | null;
+    diceShadows: [THREE.Mesh, THREE.Mesh] | null;
+    diceHalos: [THREE.Mesh, THREE.Mesh] | null;
     diceAnimTime: number;
+    diceAnimDuration: number;
+    diceStartPos: [[number, number], [number, number]];
+    diceEndPos: [[number, number], [number, number]];
+    diceTargetYaw: [number, number];
     maxAnisotropy: number;
     shadowTexture: THREE.Texture | null;
     isSoftwareGl: boolean;
@@ -119,11 +140,28 @@ export default function MonopolyBoard3D({
     tileOwnerSignatures: [],
     tokenGroups: new Map(),
     tokenTargetPos: new Map(),
+    tokenVisualTile: new Map(),
+    tokenTargetTile: new Map(),
+    tokenStepProgress: new Map(),
+    bankruptExitTokens: new Map(),
     buildingGroups: new Map(),
     buildingCounts: new Map(),
+    buildingSpawnAnim: new Map(),
     selectionRing: null,
     diceMeshes: null,
+    diceShadows: null,
+    diceHalos: null,
     diceAnimTime: 0,
+    diceAnimDuration: 1.25,
+    diceStartPos: [
+      [-3.1, 5.1],
+      [3.1, 5.3],
+    ],
+    diceEndPos: [
+      [-1.15, 2.8],
+      [1.15, 2.8],
+    ],
+    diceTargetYaw: [0.22, -0.28],
     maxAnisotropy: 1,
     shadowTexture: null,
     isSoftwareGl: false,
@@ -134,12 +172,47 @@ export default function MonopolyBoard3D({
     hasActiveCameraTransition: false,
   });
 
+  // Helper to launch a fresh 3D dice throw trajectory
+  const trigger3DDiceThrow = React.useCallback(() => {
+    const handles = sceneHandlesRef.current;
+    const angleOffset = (Math.random() - 0.5) * 0.7;
+    handles.diceAnimDuration = 1.25;
+    handles.diceAnimTime = 1.25;
+    handles.diceStartPos = [
+      [-3.2 + Math.sin(angleOffset) * 0.8, 5.2],
+      [3.2 + Math.cos(angleOffset) * 0.8, 5.4],
+    ];
+    handles.diceEndPos = [
+      [-1.18 + (Math.random() - 0.5) * 0.24, 2.75 + (Math.random() - 0.5) * 0.24],
+      [1.18 + (Math.random() - 0.5) * 0.24, 2.75 + (Math.random() - 0.5) * 0.24],
+    ];
+    handles.diceTargetYaw = [
+      (Math.random() - 0.5) * 0.65,
+      (Math.random() - 0.5) * 0.65,
+    ];
+  }, []);
+
   // Trigger 3D dice tumble animation whenever diceRollTrigger increments
   useEffect(() => {
     if (diceRollTrigger > 0) {
-      sceneHandlesRef.current.diceAnimTime = 0.85;
+      trigger3DDiceThrow();
     }
-  }, [diceRollTrigger]);
+  }, [diceRollTrigger, trigger3DDiceThrow]);
+
+  // Also trigger 3D dice animation whenever a new ROLL log entry occurs (e.g. Bot or Online player roll)
+  useEffect(() => {
+    const latestLog = gameState.logs[0];
+    if (
+      latestLog &&
+      latestLog.type === 'ROLL' &&
+      latestLog.id !== lastRollLogIdRef.current
+    ) {
+      lastRollLogIdRef.current = latestLog.id;
+      if (sceneHandlesRef.current.diceAnimTime <= 0.9) {
+        trigger3DDiceThrow();
+      }
+    }
+  }, [gameState.logs, trigger3DDiceThrow]);
 
   // Update camera preset goals smoothly when cameraPreset or turn changes
   useEffect(() => {
@@ -310,6 +383,10 @@ export default function MonopolyBoard3D({
               bGroup.add(villa);
             }
           }
+          if (houseCount > prevCount) {
+            bGroup.scale.set(0.05, 0.05, 0.05);
+            handles.buildingSpawnAnim.set(i, 0);
+          }
           handles.buildingsRoot.add(bGroup);
           handles.buildingGroups.set(i, bGroup);
         }
@@ -320,13 +397,69 @@ export default function MonopolyBoard3D({
     const activeIds = new Set(
       gameState.players.filter((p) => !p.bankrupt).map((p) => p.id)
     );
+    const bankruptIds = new Set(
+      gameState.players.filter((p) => p.bankrupt).map((p) => p.id)
+    );
 
-    // Remove bankrupt/removed tokens
+    // Transition newly bankrupt tokens into a 3D exit animation, or remove tokens from prior matches
     for (const [id, meshGroup] of handles.tokenGroups.entries()) {
       if (!activeIds.has(id)) {
-        handles.tokensRoot.remove(meshGroup);
         handles.tokenGroups.delete(id);
         handles.tokenTargetPos.delete(id);
+
+        if (bankruptIds.has(id) && !handles.bankruptExitTokens.has(id)) {
+          // Prepare mesh materials for smooth opacity fade-out and subtle crimson tint
+          meshGroup.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mesh = child as THREE.Mesh;
+              if (Array.isArray(mesh.material)) {
+                mesh.material = mesh.material.map((m) => {
+                  const cloned = m.clone();
+                  cloned.transparent = true;
+                  return cloned;
+                });
+              } else if (mesh.material) {
+                const cloned = mesh.material.clone();
+                cloned.transparent = true;
+                if (
+                  'emissive' in cloned &&
+                  cloned.emissive instanceof THREE.Color
+                ) {
+                  cloned.emissive.setHex(0x7f1d1d);
+                  (cloned as THREE.MeshStandardMaterial).emissiveIntensity = 0.45;
+                }
+                mesh.material = cloned;
+              }
+            }
+          });
+
+          // Create an expanding crimson-gold liquidation ring on the tile
+          const ringGeo = new THREE.RingGeometry(0.28, 0.46, 32);
+          const ringMat = new THREE.MeshBasicMaterial({
+            color: 0xef4444,
+            side: THREE.DoubleSide,
+            transparent: true,
+            depthWrite: false,
+            opacity: 0.85,
+          });
+          const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+          ringMesh.rotation.x = -Math.PI / 2;
+          ringMesh.position.set(
+            meshGroup.position.x,
+            0.33,
+            meshGroup.position.z
+          );
+          handles.tokensRoot.add(ringMesh);
+
+          handles.bankruptExitTokens.set(id, {
+            group: meshGroup,
+            ring: ringMesh,
+            progress: 0,
+            startPos: meshGroup.position.clone(),
+          });
+        } else {
+          handles.tokensRoot.remove(meshGroup);
+        }
       }
     }
 
@@ -353,6 +486,11 @@ export default function MonopolyBoard3D({
         tokenMesh.position.set(tf.x, 0.32, tf.z);
         handles.tokensRoot.add(tokenMesh);
         handles.tokenGroups.set(p.id, tokenMesh);
+        handles.tokenVisualTile.set(p.id, p.position);
+        handles.tokenTargetTile.set(p.id, p.position);
+        handles.tokenStepProgress.set(p.id, 0);
+      } else {
+        handles.tokenTargetTile.set(p.id, p.position);
       }
 
       const occupants = playersByTile.get(p.position) || [p.id];
@@ -563,21 +701,70 @@ export default function MonopolyBoard3D({
     centerpieceRoot.position.y = 0.315;
     scene.add(centerpieceRoot);
 
+    const shadowTexture = createContactShadowTexture();
+
     const diceMaterials = createDiceMaterials(maxAnisotropy);
-    const dieGeo = new THREE.BoxGeometry(0.68, 0.68, 0.68);
+    const dieGeo = new THREE.BoxGeometry(0.76, 0.76, 0.76);
     const die1 = new THREE.Mesh(dieGeo, diceMaterials);
     const die2 = new THREE.Mesh(dieGeo, diceMaterials);
-    die1.position.set(-1.1, 0.66, 2.8);
-    die2.position.set(1.1, 0.66, 2.8);
+    // Use 'YXZ' Euler order so Rx and Rz place the exact pip face on +Y while Ry spins flat on the table
+    die1.rotation.order = 'YXZ';
+    die2.rotation.order = 'YXZ';
+    die1.position.set(-1.15, 0.7, 2.8);
+    die2.position.set(1.15, 0.7, 2.8);
     die1.castShadow = true;
     die2.castShadow = true;
     scene.add(die1, die2);
 
+    // Contact shadows directly beneath each 3D die
+    const dieShadowGeo = new THREE.PlaneGeometry(1.35, 1.35);
+    const dieShadowMat1 = new THREE.MeshBasicMaterial({
+      map: shadowTexture,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.55,
+    });
+    const dieShadowMat2 = new THREE.MeshBasicMaterial({
+      map: shadowTexture,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.55,
+    });
+    const dieShadow1 = new THREE.Mesh(dieShadowGeo, dieShadowMat1);
+    const dieShadow2 = new THREE.Mesh(dieShadowGeo, dieShadowMat2);
+    dieShadow1.rotation.x = -Math.PI / 2;
+    dieShadow2.rotation.x = -Math.PI / 2;
+    dieShadow1.position.set(-1.15, 0.324, 2.8);
+    dieShadow2.position.set(1.15, 0.324, 2.8);
+    scene.add(dieShadow1, dieShadow2);
+
+    // Golden impact / ROLL-phase halo rings beneath the dice
+    const dieHaloGeo = new THREE.RingGeometry(0.48, 0.66, 32);
+    const dieHaloMat1 = new THREE.MeshBasicMaterial({
+      color: 0xd4af37,
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.45,
+    });
+    const dieHaloMat2 = new THREE.MeshBasicMaterial({
+      color: 0xd4af37,
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.45,
+    });
+    const dieHalo1 = new THREE.Mesh(dieHaloGeo, dieHaloMat1);
+    const dieHalo2 = new THREE.Mesh(dieHaloGeo, dieHaloMat2);
+    dieHalo1.rotation.x = -Math.PI / 2;
+    dieHalo2.rotation.x = -Math.PI / 2;
+    dieHalo1.position.set(-1.15, 0.328, 2.8);
+    dieHalo2.position.set(1.15, 0.328, 2.8);
+    scene.add(dieHalo1, dieHalo2);
+
     const tokensRoot = new THREE.Group();
     const buildingsRoot = new THREE.Group();
     scene.add(tokensRoot, buildingsRoot);
-
-    const shadowTexture = createContactShadowTexture();
 
     sceneHandlesRef.current = {
       ...sceneHandlesRef.current,
@@ -585,6 +772,8 @@ export default function MonopolyBoard3D({
       tilesGroup,
       selectionRing,
       diceMeshes: [die1, die2],
+      diceShadows: [dieShadow1, dieShadow2],
+      diceHalos: [dieHalo1, dieHalo2],
       maxAnisotropy,
       shadowTexture,
       isSoftwareGl,
@@ -730,28 +919,106 @@ export default function MonopolyBoard3D({
       rotatingGlobe.rotation.y += dt * 0.45;
       rotatingGlobe.position.y = 1.35 + Math.sin(elapsed * 1.8) * 0.06;
 
-      // Smoothly damp player tokens toward their target tile positions with a hop arc
+      const curSideLength =
+        BOARD_SIZE_CONFIGS[gameStateRef.current.boardSize]?.sideLength || 10;
+      const curTotalTiles = curSideLength * 4;
+
+      // Animate 3D Villas & Grand Hotels spring pop-in when newly built
+      if (handles.buildingSpawnAnim.size > 0) {
+        for (const [tileIdx, prog] of handles.buildingSpawnAnim.entries()) {
+          const bGroup = handles.buildingGroups.get(tileIdx);
+          if (!bGroup) {
+            handles.buildingSpawnAnim.delete(tileIdx);
+            continue;
+          }
+          const nextProg = Math.min(1, prog + dt * 2.2);
+          handles.buildingSpawnAnim.set(tileIdx, nextProg);
+          // Elastic spring overshoot curve: 0 -> 1.18 -> 1.0
+          const overshoot =
+            nextProg < 0.7
+              ? (nextProg / 0.7) * 1.18
+              : 1.18 - ((nextProg - 0.7) / 0.3) * 0.18;
+          bGroup.scale.set(overshoot, overshoot, overshoot);
+          if (nextProg >= 1) {
+            bGroup.scale.set(1, 1, 1);
+            handles.buildingSpawnAnim.delete(tileIdx);
+          }
+        }
+      }
+
+      // Tile-by-Tile Perimeter Hopping for 3D Player Tokens (like real Monopoly pieces!)
       for (const [id, group] of handles.tokenGroups.entries()) {
-        const target = handles.tokenTargetPos.get(id);
-        if (target) {
+        const finalTarget = handles.tokenTargetPos.get(id);
+        const visTile = handles.tokenVisualTile.get(id) ?? 0;
+        const tgtTile = handles.tokenTargetTile.get(id) ?? visTile;
+
+        if (visTile !== tgtTile && curTotalTiles > 0) {
+          const forwardSteps =
+            (tgtTile - visTile + curTotalTiles) % curTotalTiles;
+          // If step count is <= 16 (normal roll or card advance), hop tile-by-tile along the perimeter
+          if (forwardSteps > 0 && forwardSteps <= 16) {
+            const nextTile = (visTile + 1) % curTotalTiles;
+            const prevStepProg = handles.tokenStepProgress.get(id) ?? 0;
+            // Faster stepping when many spaces remain
+            const stepSpeed = forwardSteps > 6 ? 11.5 : 8.5;
+            const nextStepProg = prevStepProg + dt * stepSpeed;
+
+            if (nextStepProg >= 1) {
+              handles.tokenVisualTile.set(id, nextTile);
+              handles.tokenStepProgress.set(id, 0);
+              const arrivedTf = getTileTransform(nextTile, curSideLength);
+              group.position.x = arrivedTf.x;
+              group.position.z = arrivedTf.z;
+              group.position.y = 0.32;
+            } else {
+              handles.tokenStepProgress.set(id, nextStepProg);
+              const fromTf = getTileTransform(visTile, curSideLength);
+              const toTf = getTileTransform(nextTile, curSideLength);
+              const tx = THREE.MathUtils.lerp(fromTf.x, toTf.x, nextStepProg);
+              const tz = THREE.MathUtils.lerp(fromTf.z, toTf.z, nextStepProg);
+              const hopArc = Math.sin(nextStepProg * Math.PI) * 0.62;
+
+              group.position.x = tx;
+              group.position.z = tz;
+              group.position.y = 0.32 + hopArc;
+
+              const moveAngle = Math.atan2(
+                toTf.x - fromTf.x,
+                toTf.z - fromTf.z
+              );
+              group.rotation.y = THREE.MathUtils.damp(
+                group.rotation.y,
+                moveAngle,
+                14,
+                dt
+              );
+            }
+            continue;
+          } else {
+            // Direct flight (e.g. Sent to Detention across the board)
+            handles.tokenVisualTile.set(id, tgtTile);
+            handles.tokenStepProgress.set(id, 0);
+          }
+        }
+
+        if (finalTarget) {
           _scratchVecA.set(group.position.x, 0, group.position.z);
-          _scratchVecB.set(target.x, 0, target.z);
+          _scratchVecB.set(finalTarget.x, 0, finalTarget.z);
           const distXZ = _scratchVecA.distanceTo(_scratchVecB);
 
           group.position.x = THREE.MathUtils.damp(
             group.position.x,
-            target.x,
-            6.5,
+            finalTarget.x,
+            8.5,
             dt
           );
           group.position.z = THREE.MathUtils.damp(
             group.position.z,
-            target.z,
-            6.5,
+            finalTarget.z,
+            8.5,
             dt
           );
 
-          // Hop arc when moving
           const hopHeight = distXZ > 0.08 ? Math.min(1.3, distXZ * 0.32) : 0;
           group.position.y = THREE.MathUtils.damp(
             group.position.y,
@@ -762,8 +1029,8 @@ export default function MonopolyBoard3D({
 
           if (distXZ > 0.05) {
             const angle = Math.atan2(
-              target.x - group.position.x,
-              target.z - group.position.z
+              finalTarget.x - group.position.x,
+              finalTarget.z - group.position.z
             );
             group.rotation.y = THREE.MathUtils.damp(
               group.rotation.y,
@@ -775,70 +1042,310 @@ export default function MonopolyBoard3D({
         }
       }
 
-      // Animate 3D Dice
+      // Animate bankrupt tokens exiting the board (lift, tilt, spin, scale down & fade out)
+      if (handles.bankruptExitTokens.size > 0 && handles.tokensRoot) {
+        for (const [id, exitState] of handles.bankruptExitTokens.entries()) {
+          exitState.progress = Math.min(1, exitState.progress + dt * 0.62);
+          const p = exitState.progress;
+          const easeOut = 1 - Math.pow(1 - p, 2);
+
+          // Ascend & spiral while tilting and shrinking
+          exitState.group.position.y = exitState.startPos.y + easeOut * 2.15;
+          exitState.group.rotation.y += dt * (4.5 + p * 8.0);
+          exitState.group.rotation.z = Math.sin(p * Math.PI * 3) * 0.35;
+          exitState.group.rotation.x = p * 0.55;
+
+          const scaleFactor = Math.max(0.02, 1 - Math.pow(p, 1.6));
+          exitState.group.scale.setScalar(scaleFactor);
+
+          const opacity = Math.max(0, 1 - Math.pow(p, 1.35));
+          exitState.group.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mat = (child as THREE.Mesh).material;
+              if (Array.isArray(mat)) {
+                for (const m of mat) m.opacity = opacity;
+              } else if (mat) {
+                mat.opacity = opacity;
+              }
+            }
+          });
+
+          // Expand and fade out the liquidation ring on the tile
+          const ringScale = 1 + easeOut * 3.1;
+          exitState.ring.scale.set(ringScale, ringScale, 1);
+          (exitState.ring.material as THREE.MeshBasicMaterial).opacity =
+            Math.max(0, 0.85 * (1 - p));
+
+          if (p >= 1) {
+            handles.tokensRoot.remove(exitState.group);
+            handles.tokensRoot.remove(exitState.ring);
+            exitState.ring.geometry.dispose();
+            (exitState.ring.material as THREE.Material).dispose();
+            handles.bankruptExitTokens.delete(id);
+          }
+        }
+      }
+
+      // Animate 3D Dice:
+      // 1) Active Multi-Bounce Throw Trajectory (when handles.diceAnimTime > 0), landing on gameState.dice
+      // 2) 'ROLL' Phase Pre-Roll Wind-Up Hover Animation (when phase === 'ROLL' and diceAnimTime === 0)
+      // 3) Settled Rest State showing the exact rolled top face (when phase !== 'ROLL' and diceAnimTime === 0)
       if (handles.diceMeshes) {
         const [dMesh1, dMesh2] = handles.diceMeshes;
         const [val1, val2] = gameStateRef.current.dice;
+        const phase = gameStateRef.current.phase;
+        const r1 = dieTopRotations[val1] || [0, 0, 0];
+        const r2 = dieTopRotations[val2] || [0, 0, 0];
+        const restY = 0.7;
+
         if (handles.diceAnimTime > 0) {
           handles.diceAnimTime = Math.max(0, handles.diceAnimTime - dt);
-          const bounce = Math.abs(Math.sin(handles.diceAnimTime * 14)) * 1.6;
-          dMesh1.position.y = 0.66 + bounce;
-          dMesh2.position.y = 0.66 + bounce * 0.85;
-          dMesh1.rotation.x += dt * 18;
-          dMesh1.rotation.z += dt * 14;
-          dMesh2.rotation.y += dt * 16;
-          dMesh2.rotation.x += dt * 15;
-        } else {
+          const duration = handles.diceAnimDuration || 1.25;
+          const u = 1 - handles.diceAnimTime / duration; // 0 (throw release) -> 1 (settled)
+          const easeOut = 1 - Math.pow(1 - u, 3);
+
+          // Horizontal parabolic path from release coordinates to landing spot
+          const [s1x, s1z] = handles.diceStartPos[0];
+          const [s2x, s2z] = handles.diceStartPos[1];
+          const [e1x, e1z] = handles.diceEndPos[0];
+          const [e2x, e2z] = handles.diceEndPos[1];
+
+          dMesh1.position.x = THREE.MathUtils.lerp(s1x, e1x, easeOut);
+          dMesh1.position.z = THREE.MathUtils.lerp(s1z, e1z, easeOut);
+          dMesh2.position.x = THREE.MathUtils.lerp(s2x, e2x, easeOut);
+          dMesh2.position.z = THREE.MathUtils.lerp(s2z, e2z, easeOut);
+
+          // Multi-bounce vertical curve (3 decaying arcs landing flush at restY)
+          const computeBounceHeight = (prog: number, stagger: number) => {
+            const p = Math.min(1, Math.max(0, prog * (1 + stagger)));
+            if (p < 0.52) {
+              // First high drop & lob from throw height
+              const local = p / 0.52;
+              return (
+                (1 - local) * 2.1 + Math.sin(local * Math.PI) * 1.15
+              );
+            }
+            if (p < 0.8) {
+              // Second bounce after first board impact
+              const local = (p - 0.52) / 0.28;
+              return Math.sin(local * Math.PI) * 1.05;
+            }
+            // Third subtle settling bounce
+            const local = (p - 0.8) / 0.2;
+            return Math.sin(local * Math.PI) * 0.32;
+          };
+
+          dMesh1.position.y = restY + computeBounceHeight(u, 0);
+          dMesh2.position.y = restY + computeBounceHeight(u, 0.04);
+
+          // Continuous multi-axis tumble that decays smoothly to 0 mod 2*PI so each die lands on r1 / r2
+          const spinDecay = Math.pow(1 - u, 2.35);
+          const fullSpinsX = Math.PI * 6; // 3 full turns
+          const fullSpinsZ = Math.PI * 4; // 2 full turns
+          const fullSpinsY = Math.PI * 4; // 2 full horizontal turns
+
+          dMesh1.rotation.x = r1[0] + spinDecay * fullSpinsX;
+          dMesh1.rotation.z = r1[2] + spinDecay * fullSpinsZ;
+          dMesh1.rotation.y = handles.diceTargetYaw[0] + spinDecay * fullSpinsY;
+
+          dMesh2.rotation.x = r2[0] - spinDecay * fullSpinsX;
+          dMesh2.rotation.z = r2[2] + spinDecay * fullSpinsZ;
+          dMesh2.rotation.y = handles.diceTargetYaw[1] - spinDecay * fullSpinsY;
+        } else if (phase === 'ROLL') {
+          // During 'ROLL' phase: active 3D wind-up hover & spin animation awaiting the roll result
+          const hoverY1 = restY + 0.68 + Math.sin(elapsed * 4.2) * 0.16;
+          const hoverY2 = restY + 0.68 + Math.cos(elapsed * 4.2) * 0.16;
+          const orbitX1 = -1.25 + Math.cos(elapsed * 2.4) * 0.18;
+          const orbitZ1 = 2.8 + Math.sin(elapsed * 2.4) * 0.18;
+          const orbitX2 = 1.25 - Math.cos(elapsed * 2.4) * 0.18;
+          const orbitZ2 = 2.8 - Math.sin(elapsed * 2.4) * 0.18;
+
+          dMesh1.position.x = THREE.MathUtils.damp(
+            dMesh1.position.x,
+            orbitX1,
+            8,
+            dt
+          );
           dMesh1.position.y = THREE.MathUtils.damp(
             dMesh1.position.y,
-            0.66,
+            hoverY1,
+            8,
+            dt
+          );
+          dMesh1.position.z = THREE.MathUtils.damp(
+            dMesh1.position.z,
+            orbitZ1,
+            8,
+            dt
+          );
+
+          dMesh2.position.x = THREE.MathUtils.damp(
+            dMesh2.position.x,
+            orbitX2,
+            8,
+            dt
+          );
+          dMesh2.position.y = THREE.MathUtils.damp(
+            dMesh2.position.y,
+            hoverY2,
+            8,
+            dt
+          );
+          dMesh2.position.z = THREE.MathUtils.damp(
+            dMesh2.position.z,
+            orbitZ2,
+            8,
+            dt
+          );
+
+          dMesh1.rotation.x += dt * 3.2;
+          dMesh1.rotation.y += dt * 2.6;
+          dMesh1.rotation.z += dt * 1.9;
+
+          dMesh2.rotation.x -= dt * 2.9;
+          dMesh2.rotation.y -= dt * 3.1;
+          dMesh2.rotation.z += dt * 2.2;
+        } else {
+          // Settled on the randomly determined result [val1, val2]
+          const [e1x, e1z] = handles.diceEndPos[0];
+          const [e2x, e2z] = handles.diceEndPos[1];
+
+          dMesh1.position.x = THREE.MathUtils.damp(
+            dMesh1.position.x,
+            e1x,
+            10,
+            dt
+          );
+          dMesh1.position.y = THREE.MathUtils.damp(
+            dMesh1.position.y,
+            restY,
+            12,
+            dt
+          );
+          dMesh1.position.z = THREE.MathUtils.damp(
+            dMesh1.position.z,
+            e1z,
+            10,
+            dt
+          );
+
+          dMesh2.position.x = THREE.MathUtils.damp(
+            dMesh2.position.x,
+            e2x,
             10,
             dt
           );
           dMesh2.position.y = THREE.MathUtils.damp(
             dMesh2.position.y,
-            0.66,
+            restY,
+            12,
+            dt
+          );
+          dMesh2.position.z = THREE.MathUtils.damp(
+            dMesh2.position.z,
+            e2z,
             10,
             dt
           );
-          const r1 = dieTopRotations[val1] || [0, 0, 0];
-          const r2 = dieTopRotations[val2] || [0, 0, 0];
+
           dMesh1.rotation.x = THREE.MathUtils.damp(
             dMesh1.rotation.x,
             r1[0],
-            9,
+            12,
             dt
           );
           dMesh1.rotation.y = THREE.MathUtils.damp(
             dMesh1.rotation.y,
-            r1[1],
-            9,
+            handles.diceTargetYaw[0],
+            12,
             dt
           );
           dMesh1.rotation.z = THREE.MathUtils.damp(
             dMesh1.rotation.z,
             r1[2],
-            9,
+            12,
             dt
           );
+
           dMesh2.rotation.x = THREE.MathUtils.damp(
             dMesh2.rotation.x,
             r2[0],
-            9,
+            12,
             dt
           );
           dMesh2.rotation.y = THREE.MathUtils.damp(
             dMesh2.rotation.y,
-            r2[1],
-            9,
+            handles.diceTargetYaw[1],
+            12,
             dt
           );
           dMesh2.rotation.z = THREE.MathUtils.damp(
             dMesh2.rotation.z,
             r2[2],
-            9,
+            12,
             dt
           );
+        }
+
+        // Update dynamic contact shadows and gold landing halos beneath both dice
+        if (handles.diceShadows) {
+          const [sh1, sh2] = handles.diceShadows;
+          sh1.position.x = dMesh1.position.x;
+          sh1.position.z = dMesh1.position.z;
+          sh2.position.x = dMesh2.position.x;
+          sh2.position.z = dMesh2.position.z;
+
+          const h1 = Math.max(0, dMesh1.position.y - restY);
+          const h2 = Math.max(0, dMesh2.position.y - restY);
+          const sc1 = Math.max(0.55, 1 - h1 * 0.16);
+          const sc2 = Math.max(0.55, 1 - h2 * 0.16);
+          sh1.scale.set(sc1, sc1, 1);
+          sh2.scale.set(sc2, sc2, 1);
+          (sh1.material as THREE.MeshBasicMaterial).opacity = Math.max(
+            0.18,
+            0.6 - h1 * 0.15
+          );
+          (sh2.material as THREE.MeshBasicMaterial).opacity = Math.max(
+            0.18,
+            0.6 - h2 * 0.15
+          );
+        }
+
+        if (handles.diceHalos) {
+          const [hl1, hl2] = handles.diceHalos;
+          hl1.position.x = dMesh1.position.x;
+          hl1.position.z = dMesh1.position.z;
+          hl2.position.x = dMesh2.position.x;
+          hl2.position.z = dMesh2.position.z;
+
+          const haloScale =
+            handles.diceAnimTime > 0
+              ? 1.15
+              : phase === 'ROLL'
+              ? 1.05 + Math.sin(elapsed * 4.2) * 0.12
+              : 1.0;
+          hl1.scale.set(haloScale, haloScale, 1);
+          hl2.scale.set(haloScale, haloScale, 1);
+        }
+
+        // Project 3D Dice Status Badge directly above the dice pair
+        if (diceBadgeRef.current) {
+          const midX = (dMesh1.position.x + dMesh2.position.x) * 0.5;
+          const midZ = (dMesh1.position.z + dMesh2.position.z) * 0.5;
+          const maxY = Math.max(dMesh1.position.y, dMesh2.position.y) + 0.85;
+          _scratchVecA.set(midX, maxY, midZ).project(camera);
+          if (_scratchVecA.z > 1) {
+            diceBadgeRef.current.style.display = 'none';
+          } else {
+            const cw = container?.clientWidth || window.innerWidth;
+            const ch = container?.clientHeight || window.innerHeight;
+            const bx = (_scratchVecA.x * 0.5 + 0.5) * cw;
+            const by = (-_scratchVecA.y * 0.5 + 0.5) * ch;
+            diceBadgeRef.current.style.display = 'flex';
+            diceBadgeRef.current.style.transform = `translate3d(${bx.toFixed(
+              1
+            )}px, ${by.toFixed(1)}px, 0) translate(-50%, -50%)`;
+          }
         }
       }
 
@@ -1006,7 +1513,7 @@ export default function MonopolyBoard3D({
           const isSelected = selectedTileIndex === idx;
           const isCompact = sideLength >= 17;
 
-          return (
+            return (
             <button
               key={`${gameState.boardSize}-${idx}`}
               ref={(el) => {
@@ -1080,6 +1587,39 @@ export default function MonopolyBoard3D({
             </button>
           );
         })}
+
+        {/* Projected 3D Dice Status & Result Badge anchored above the 3D dice */}
+        <div
+          ref={diceBadgeRef}
+          style={{ top: 0, left: 0 }}
+          className="absolute pointer-events-none flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#14100E] border border-[#D4AF37] text-[#FAF6F0] shadow-xl whitespace-nowrap z-20"
+        >
+          {gameState.phase === 'ROLL' ? (
+            <>
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#D4AF37]">
+                Roll Phase
+              </span>
+              <span className="text-[10px] text-stone-300">
+                · 3D Dice Ready
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-[10px] font-bold text-stone-300">
+                Rolled:
+              </span>
+              <span className="text-xs font-mono font-extrabold text-[#D4AF37]">
+                {gameState.dice[0]} + {gameState.dice[1]} ={' '}
+                {gameState.dice[0] + gameState.dice[1]}
+              </span>
+              {gameState.lastRollWasDoubles && (
+                <span className="px-1.5 py-0.2 rounded bg-[#D4AF37] text-[#0F0C0A] text-[9px] font-extrabold">
+                  DOUBLES
+                </span>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* 3. Top-Left 3D Readability HUD: Toggle 3D Crisp Labels + Live Hovered/Selected Tile Magnifier */}

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import Markdown from 'react-markdown';
 import {
   ChevronDown,
@@ -1567,7 +1568,18 @@ export default function MonopolyApp() {
 
           return (
             <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
-              <div className="w-full max-w-md rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-5 text-[#FAF6F0] space-y-4">
+              <motion.div
+                key={`notice-${notice.id}`}
+                initial={{
+                  opacity: 0,
+                  scale: 0.88,
+                  y: 20,
+                  rotateZ: notice.kind === 'CARD_DRAWN' ? -2.5 : 0,
+                }}
+                animate={{ opacity: 1, scale: 1, y: 0, rotateZ: 0 }}
+                transition={{ type: 'spring', stiffness: 360, damping: 26 }}
+                className="w-full max-w-md rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-5 text-[#FAF6F0] space-y-4"
+              >
                 {/* Top Dice & Passed GO Status Header */}
                 <div className="flex items-center justify-between border-b border-white/10 pb-3">
                   <div className="flex items-center gap-2 text-xs">
@@ -1589,9 +1601,14 @@ export default function MonopolyApp() {
                         : 'Turn Resolution'}
                     </span>
                     {notice.passedGoBonus && (
-                      <span className="px-2 py-0.5 rounded bg-emerald-900/90 text-emerald-300 font-mono font-bold">
+                      <motion.span
+                        initial={{ scale: 0.6, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: 'spring', stiffness: 420, damping: 18 }}
+                        className="px-2 py-0.5 rounded bg-emerald-900/90 text-emerald-300 font-mono font-bold"
+                      >
                         +$200 Passed GO!
-                      </span>
+                      </motion.span>
                     )}
                   </div>
                   <div className="flex items-center gap-1.5 text-xs font-mono text-stone-300">
@@ -1605,7 +1622,12 @@ export default function MonopolyApp() {
 
                 {/* Official Title Deed Card Preview if BUY_DECISION */}
                 {notice.kind === 'BUY_DECISION' ? (
-                  <div className="rounded-xl bg-[#FAF6F0] text-[#14100E] border border-[#D4AF37] p-3.5 space-y-2.5">
+                  <motion.div
+                    initial={{ y: 10, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={{ delay: 0.05, duration: 0.22 }}
+                    className="rounded-xl bg-[#FAF6F0] text-[#14100E] border border-[#D4AF37] p-3.5 space-y-2.5"
+                  >
                     <div
                       className="p-2.5 rounded-lg text-center text-white font-bold"
                       style={{ backgroundColor: noticeTile.colorHex }}
@@ -1663,10 +1685,15 @@ export default function MonopolyApp() {
                         ${currentPlayer?.cash || 0}
                       </span>
                     </div>
-                  </div>
+                  </motion.div>
                 ) : (
                   /* Standard Event / Rent / Tax / Card / Bankruptcy Card */
-                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/15 space-y-2.5">
+                  <motion.div
+                    initial={{ y: 10, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={{ delay: 0.05, duration: 0.22 }}
+                    className="p-4 rounded-xl bg-[#0F0C0A] border border-white/15 space-y-2.5"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-xs text-[#D4AF37] font-semibold">
@@ -1686,7 +1713,15 @@ export default function MonopolyApp() {
 
                       {typeof notice.amountDelta === 'number' &&
                         notice.amountDelta !== 0 && (
-                          <div
+                          <motion.div
+                            initial={{ scale: 0.5, opacity: 0, y: -8 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            transition={{
+                              type: 'spring',
+                              stiffness: 420,
+                              damping: 18,
+                              delay: 0.1,
+                            }}
                             className={`px-2.5 py-1 rounded-lg font-mono text-sm font-extrabold shrink-0 ${
                               notice.amountDelta > 0
                                 ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
@@ -1696,7 +1731,7 @@ export default function MonopolyApp() {
                             {notice.amountDelta > 0
                               ? `+$${notice.amountDelta}`
                               : `-$${Math.abs(notice.amountDelta)}`}
-                          </div>
+                          </motion.div>
                         )}
                     </div>
 
@@ -1714,7 +1749,7 @@ export default function MonopolyApp() {
                         </span>
                       </div>
                     )}
-                  </div>
+                  </motion.div>
                 )}
 
                 {/* Action Buttons */}
@@ -1767,7 +1802,7 @@ export default function MonopolyApp() {
                     Continue
                   </button>
                 )}
-              </div>
+              </motion.div>
             </div>
           );
         })()}
@@ -1775,7 +1810,12 @@ export default function MonopolyApp() {
       {/* 4B. Championship Victory Pop-up Modal (When status === 'GAME_OVER') */}
       {appPhase === 'IN_GAME' && gameState.status === 'GAME_OVER' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-6 text-[#FAF6F0] text-center space-y-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.85, y: 24 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+            className="w-full max-w-lg rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-6 text-[#FAF6F0] text-center space-y-4"
+          >
             <div className="text-xs font-extrabold uppercase tracking-wider text-[#D4AF37]">
               Grand Estates 3D Championship Complete
             </div>
@@ -1806,14 +1846,19 @@ export default function MonopolyApp() {
                 Start Menu
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
 
       {/* 5. Live Auction Modal (Appears when phase === 'AUCTION') */}
       {gameState.phase === 'AUCTION' && gameState.activeAuction && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
-          <div className="w-full max-w-lg rounded-xl bg-[#14100E] border border-[#D4AF37]/40 shadow-2xl p-6 text-[#FAF6F0]">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9, y: 18 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ type: 'spring', stiffness: 340, damping: 26 }}
+            className="w-full max-w-lg rounded-xl bg-[#14100E] border border-[#D4AF37]/40 shadow-2xl p-6 text-[#FAF6F0]"
+          >
             {(() => {
               const auction = gameState.activeAuction!;
               const auctionTile =
@@ -1853,9 +1898,14 @@ export default function MonopolyApp() {
                       style={{ fontFamily: 'var(--font-mono), monospace' }}
                     >
                       <div className="text-xs text-stone-400">Current Bid</div>
-                      <div className="text-xl font-bold text-[#D4AF37]">
+                      <motion.div
+                        key={auction.highestBid}
+                        initial={{ scale: 1.25, color: '#34d399' }}
+                        animate={{ scale: 1, color: '#D4AF37' }}
+                        className="text-xl font-bold text-[#D4AF37]"
+                      >
                         ${auction.highestBid}
-                      </div>
+                      </motion.div>
                     </div>
                   </div>
 
@@ -1936,14 +1986,19 @@ export default function MonopolyApp() {
                 </div>
               );
             })()}
-          </div>
+          </motion.div>
         </div>
       )}
 
       {/* 6. Pending Trade Proposal Modal (For Human Recipients) */}
       {gameState.activeTrade && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
-          <div className="w-full max-w-md rounded-xl bg-[#14100E] border border-[#D4AF37]/40 shadow-2xl p-6 text-[#FAF6F0] space-y-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ type: 'spring', stiffness: 340, damping: 25 }}
+            className="w-full max-w-lg rounded-xl bg-[#14100E] border border-[#D4AF37]/40 shadow-2xl p-6 text-[#FAF6F0] space-y-4"
+          >
             {(() => {
               const trade = gameState.activeTrade!;
               const fromP = gameState.players.find(
@@ -1952,6 +2007,24 @@ export default function MonopolyApp() {
               const toP = gameState.players.find(
                 (p) => p.id === trade.toPlayerId
               );
+              const offerPropsVal = trade.offerProperties.reduce((sum, idx) => {
+                const pr = gameState.properties[idx];
+                const base = activeTiles[idx]?.price || 0;
+                return sum + (pr?.mortgaged ? Math.floor(base * 0.5) : base);
+              }, 0);
+              const requestPropsVal = trade.requestProperties.reduce(
+                (sum, idx) => {
+                  const pr = gameState.properties[idx];
+                  const base = activeTiles[idx]?.price || 0;
+                  return sum + (pr?.mortgaged ? Math.floor(base * 0.5) : base);
+                },
+                0
+              );
+              const offerTotalVal = trade.offerCash + offerPropsVal;
+              const requestTotalVal = trade.requestCash + requestPropsVal;
+              const fromNetDelta = requestTotalVal - offerTotalVal;
+              const toNetDelta = offerTotalVal - requestTotalVal;
+
               return (
                 <>
                   <h3
@@ -1963,31 +2036,79 @@ export default function MonopolyApp() {
                   <div className="grid grid-cols-2 gap-3 text-xs">
                     <div className="p-3 rounded-lg bg-[#0F0C0A] border border-white/10 space-y-1">
                       <div className="text-stone-400">
-                        {fromP?.name} Offers:
+                        {fromP?.name} Offers (${offerTotalVal} total):
                       </div>
                       <div className="font-semibold text-emerald-400 tabular-nums">
                         ${trade.offerCash} Cash
                       </div>
                       {trade.offerProperties.map((idx) => (
-                        <div key={idx} className="text-stone-200">
-                          • {activeTiles[idx]?.name}
+                        <div key={idx} className="text-stone-200 flex justify-between gap-1">
+                          <span>• {activeTiles[idx]?.name}</span>
+                          <span className="text-stone-400 font-mono">${activeTiles[idx]?.price}</span>
                         </div>
                       ))}
                     </div>
                     <div className="p-3 rounded-lg bg-[#0F0C0A] border border-white/10 space-y-1">
                       <div className="text-stone-400">
-                        In Exchange For ({toP?.name}):
+                        In Exchange For ({toP?.name} · ${requestTotalVal} total):
                       </div>
                       <div className="font-semibold text-[#D4AF37] tabular-nums">
                         ${trade.requestCash} Cash
                       </div>
                       {trade.requestProperties.map((idx) => (
-                        <div key={idx} className="text-stone-200">
-                          • {activeTiles[idx]?.name}
+                        <div key={idx} className="text-stone-200 flex justify-between gap-1">
+                          <span>• {activeTiles[idx]?.name}</span>
+                          <span className="text-stone-400 font-mono">${activeTiles[idx]?.price}</span>
                         </div>
                       ))}
                     </div>
                   </div>
+
+                  {/* Net Asset Impact Summary for Both Parties */}
+                  <div className="p-3 rounded-lg bg-[#0F0C0A] border border-[#D4AF37]/30 space-y-2 text-xs">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-[#D4AF37]">
+                      Net Change in Total Assets (Cash + Property Values)
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 font-mono">
+                      <div className="flex items-center justify-between p-2 rounded bg-[#14100E] border border-white/10">
+                        <span className="text-stone-300 truncate">{fromP?.name}:</span>
+                        <span
+                          className={`font-bold ${
+                            fromNetDelta > 0
+                              ? 'text-emerald-400'
+                              : fromNetDelta < 0
+                              ? 'text-red-400'
+                              : 'text-[#D4AF37]'
+                          }`}
+                        >
+                          {fromNetDelta > 0
+                            ? `+$${fromNetDelta}`
+                            : fromNetDelta < 0
+                            ? `-$${Math.abs(fromNetDelta)}`
+                            : '$0'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 rounded bg-[#14100E] border border-white/10">
+                        <span className="text-stone-300 truncate">{toP?.name}:</span>
+                        <span
+                          className={`font-bold ${
+                            toNetDelta > 0
+                              ? 'text-emerald-400'
+                              : toNetDelta < 0
+                              ? 'text-red-400'
+                              : 'text-[#D4AF37]'
+                          }`}
+                        >
+                          {toNetDelta > 0
+                            ? `+$${toNetDelta}`
+                            : toNetDelta < 0
+                            ? `-$${Math.abs(toNetDelta)}`
+                            : '$0'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex items-center gap-3 pt-2">
                     <button
                       onClick={() =>
@@ -2009,7 +2130,7 @@ export default function MonopolyApp() {
                 </>
               );
             })()}
-          </div>
+          </motion.div>
         </div>
       )}
 
@@ -2849,6 +2970,92 @@ export default function MonopolyApp() {
                     (pr) => pr.ownerId === partner?.id && pr.houses === 0
                   );
 
+                  // Helper to value any deed (accounting for mortgage status & improvements)
+                  const getDeedAssetValue = (tileIdx: number) => {
+                    const pr = gameState.properties[tileIdx];
+                    const tile = activeTiles[tileIdx];
+                    if (!tile) return 0;
+                    const basePrice = tile.price || 0;
+                    const deedVal = pr?.mortgaged
+                      ? Math.floor(basePrice * 0.5)
+                      : basePrice;
+                    const buildingsVal =
+                      (pr?.houses || 0) * (tile.houseCost || 0);
+                    return deedVal + buildingsVal;
+                  };
+
+                  // Total current property portfolio values for both parties
+                  const initiatorCurrPropVal = Object.values(
+                    gameState.properties
+                  )
+                    .filter((pr) => pr.ownerId === initiator?.id)
+                    .reduce(
+                      (sum, pr) => sum + getDeedAssetValue(pr.tileIndex),
+                      0
+                    );
+
+                  const partnerCurrPropVal = Object.values(gameState.properties)
+                    .filter((pr) => pr.ownerId === partner?.id)
+                    .reduce(
+                      (sum, pr) => sum + getDeedAssetValue(pr.tileIndex),
+                      0
+                    );
+
+                  const initiatorCurrCash = initiator?.cash || 0;
+                  const partnerCurrCash = partner?.cash || 0;
+
+                  const initiatorCurrTotalAssets =
+                    initiatorCurrCash + initiatorCurrPropVal;
+                  const partnerCurrTotalAssets =
+                    partnerCurrCash + partnerCurrPropVal;
+
+                  // Selected trade package valuations
+                  const offeredPropsVal = tradeOfferProps.reduce(
+                    (sum, idx) => sum + getDeedAssetValue(idx),
+                    0
+                  );
+                  const requestedPropsVal = tradeRequestProps.reduce(
+                    (sum, idx) => sum + getDeedAssetValue(idx),
+                    0
+                  );
+
+                  const initiatorOutgoingTotal =
+                    tradeOfferCash + offeredPropsVal;
+                  const initiatorIncomingTotal =
+                    tradeRequestCash + requestedPropsVal;
+
+                  // Net Change in Total Assets (Cash + Property Values) for both parties
+                  const initiatorNetDelta =
+                    initiatorIncomingTotal - initiatorOutgoingTotal;
+                  const partnerNetDelta =
+                    initiatorOutgoingTotal - initiatorIncomingTotal;
+
+                  // Post-Trade projected breakdowns
+                  const initiatorPostCash =
+                    initiatorCurrCash - tradeOfferCash + tradeRequestCash;
+                  const initiatorPostPropVal =
+                    initiatorCurrPropVal - offeredPropsVal + requestedPropsVal;
+                  const initiatorPostTotalAssets =
+                    initiatorCurrTotalAssets + initiatorNetDelta;
+
+                  const partnerPostCash =
+                    partnerCurrCash - tradeRequestCash + tradeOfferCash;
+                  const partnerPostPropVal =
+                    partnerCurrPropVal - requestedPropsVal + offeredPropsVal;
+                  const partnerPostTotalAssets =
+                    partnerCurrTotalAssets + partnerNetDelta;
+
+                  const hasAnySelection =
+                    tradeOfferCash > 0 ||
+                    tradeRequestCash > 0 ||
+                    tradeOfferProps.length > 0 ||
+                    tradeRequestProps.length > 0;
+
+                  const botLikelyAccepts =
+                    partner?.isBot &&
+                    hasAnySelection &&
+                    initiatorOutgoingTotal >= initiatorIncomingTotal * 0.9;
+
                   return (
                     <div className="space-y-4">
                       <div className="flex items-center gap-3 text-xs">
@@ -2875,8 +3082,13 @@ export default function MonopolyApp() {
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-3">
-                          <div className="text-xs font-semibold text-[#D4AF37]">
-                            Your Offer ({initiator?.name})
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-[#D4AF37]">
+                              Your Offer ({initiator?.name})
+                            </span>
+                            <span className="text-[11px] font-mono text-stone-400">
+                              Package: ${initiatorOutgoingTotal}
+                            </span>
                           </div>
                           <div>
                             <label className="block text-xs text-stone-400 mb-1">
@@ -2889,7 +3101,13 @@ export default function MonopolyApp() {
                               value={tradeOfferCash}
                               onChange={(e) =>
                                 setTradeOfferCash(
-                                  Math.max(0, Number(e.target.value))
+                                  Math.max(
+                                    0,
+                                    Math.min(
+                                      initiator?.cash || 0,
+                                      Number(e.target.value)
+                                    )
+                                  )
                                 )
                               }
                               className="w-full px-3 py-1.5 rounded bg-[#14100E] border border-white/15 text-xs text-white tabular-nums"
@@ -2897,7 +3115,8 @@ export default function MonopolyApp() {
                           </div>
                           <div className="space-y-1 max-h-36 overflow-y-auto">
                             <div className="text-xs text-stone-400">
-                              Select Deeds to Offer:
+                              Select Deeds to Offer ({tradeOfferProps.length}{' '}
+                              selected · ${offeredPropsVal}):
                             </div>
                             {myProps.length === 0 && (
                               <div className="text-xs text-stone-500 italic">
@@ -2908,27 +3127,40 @@ export default function MonopolyApp() {
                               const checked = tradeOfferProps.includes(
                                 pr.tileIndex
                               );
+                              const tile = activeTiles[pr.tileIndex];
+                              const deedVal = getDeedAssetValue(pr.tileIndex);
                               return (
                                 <label
                                   key={pr.tileIndex}
-                                  className="flex items-center gap-2 text-xs cursor-pointer py-1"
+                                  className="flex items-center justify-between gap-2 text-xs cursor-pointer py-1 px-1.5 rounded hover:bg-white/5"
                                 >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setTradeOfferProps((prev) =>
-                                        checked
-                                          ? prev.filter(
-                                              (x) => x !== pr.tileIndex
-                                            )
-                                          : [...prev, pr.tileIndex]
-                                      )
-                                    }
-                                  />
-                                  <span>
-                                    {activeTiles[pr.tileIndex]?.name} ($
-                                    {activeTiles[pr.tileIndex]?.price})
+                                  <span className="flex items-center gap-2 truncate">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setTradeOfferProps((prev) =>
+                                          checked
+                                            ? prev.filter(
+                                                (x) => x !== pr.tileIndex
+                                              )
+                                            : [...prev, pr.tileIndex]
+                                        )
+                                      }
+                                    />
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                      style={{
+                                        backgroundColor: tile?.colorHex,
+                                      }}
+                                    />
+                                    <span className="truncate">
+                                      {tile?.name}
+                                      {pr.mortgaged ? ' (Mortgaged)' : ''}
+                                    </span>
+                                  </span>
+                                  <span className="font-mono text-stone-400 shrink-0">
+                                    ${deedVal}
                                   </span>
                                 </label>
                               );
@@ -2937,8 +3169,13 @@ export default function MonopolyApp() {
                         </div>
 
                         <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-3">
-                          <div className="text-xs font-semibold text-emerald-400">
-                            Requested From {partner?.name}
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-emerald-400">
+                              Requested From {partner?.name}
+                            </span>
+                            <span className="text-[11px] font-mono text-stone-400">
+                              Package: ${initiatorIncomingTotal}
+                            </span>
                           </div>
                           <div>
                             <label className="block text-xs text-stone-400 mb-1">
@@ -2951,7 +3188,13 @@ export default function MonopolyApp() {
                               value={tradeRequestCash}
                               onChange={(e) =>
                                 setTradeRequestCash(
-                                  Math.max(0, Number(e.target.value))
+                                  Math.max(
+                                    0,
+                                    Math.min(
+                                      partner?.cash || 0,
+                                      Number(e.target.value)
+                                    )
+                                  )
                                 )
                               }
                               className="w-full px-3 py-1.5 rounded bg-[#14100E] border border-white/15 text-xs text-white tabular-nums"
@@ -2959,7 +3202,8 @@ export default function MonopolyApp() {
                           </div>
                           <div className="space-y-1 max-h-36 overflow-y-auto">
                             <div className="text-xs text-stone-400">
-                              Select Deeds to Request:
+                              Select Deeds to Request ({tradeRequestProps.length}{' '}
+                              selected · ${requestedPropsVal}):
                             </div>
                             {partnerProps.length === 0 && (
                               <div className="text-xs text-stone-500 italic">
@@ -2970,31 +3214,246 @@ export default function MonopolyApp() {
                               const checked = tradeRequestProps.includes(
                                 pr.tileIndex
                               );
+                              const tile = activeTiles[pr.tileIndex];
+                              const deedVal = getDeedAssetValue(pr.tileIndex);
                               return (
                                 <label
                                   key={pr.tileIndex}
-                                  className="flex items-center gap-2 text-xs cursor-pointer py-1"
+                                  className="flex items-center justify-between gap-2 text-xs cursor-pointer py-1 px-1.5 rounded hover:bg-white/5"
                                 >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setTradeRequestProps((prev) =>
-                                        checked
-                                          ? prev.filter(
-                                              (x) => x !== pr.tileIndex
-                                            )
-                                          : [...prev, pr.tileIndex]
-                                      )
-                                    }
-                                  />
-                                  <span>
-                                    {activeTiles[pr.tileIndex]?.name} ($
-                                    {activeTiles[pr.tileIndex]?.price})
+                                  <span className="flex items-center gap-2 truncate">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setTradeRequestProps((prev) =>
+                                          checked
+                                            ? prev.filter(
+                                                (x) => x !== pr.tileIndex
+                                              )
+                                            : [...prev, pr.tileIndex]
+                                        )
+                                      }
+                                    />
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                      style={{
+                                        backgroundColor: tile?.colorHex,
+                                      }}
+                                    />
+                                    <span className="truncate">
+                                      {tile?.name}
+                                      {pr.mortgaged ? ' (Mortgaged)' : ''}
+                                    </span>
+                                  </span>
+                                  <span className="font-mono text-stone-400 shrink-0">
+                                    ${deedVal}
                                   </span>
                                 </label>
                               );
                             })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* TRADE SUMMARY VIEW: NET CHANGE IN TOTAL ASSETS (CASH + PROPERTY VALUES) FOR BOTH PARTIES */}
+                      <div className="p-4 rounded-xl bg-[#0F0C0A] border border-[#D4AF37]/40 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2.5">
+                          <div>
+                            <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#D4AF37]">
+                              Pre-Finalization Deal Valuation & Asset Summary
+                            </div>
+                            <div className="text-[11px] text-stone-400">
+                              Net change in total assets (Cash + Property
+                              Portfolio Values) for both syndicates
+                            </div>
+                          </div>
+                          {partner && (
+                            <div
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border ${
+                                !hasAnySelection
+                                  ? 'bg-stone-900 border-white/10 text-stone-400'
+                                  : partner.isBot
+                                  ? botLikelyAccepts
+                                    ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300'
+                                    : 'bg-amber-950/90 border-amber-500/40 text-amber-300'
+                                  : initiatorNetDelta === 0
+                                  ? 'bg-[#D4AF37]/15 border-[#D4AF37]/40 text-[#D4AF37]'
+                                  : 'bg-stone-900 border-white/15 text-stone-200'
+                              }`}
+                            >
+                              {!hasAnySelection
+                                ? 'Select cash or deeds to preview impact'
+                                : partner.isBot
+                                ? botLikelyAccepts
+                                  ? `AI Outlook: ${partner.name} Likely to Accept`
+                                  : `AI Outlook: ${partner.name} Likely to Decline (Needs ≥90% value)`
+                                : initiatorNetDelta === 0
+                                ? 'Balanced Parity Swap ($0 Net Spread)'
+                                : `Spread: $${Math.abs(initiatorNetDelta)} ${
+                                    initiatorNetDelta > 0
+                                      ? `in ${initiator?.name}'s favor`
+                                      : `in ${partner.name}'s favor`
+                                  }`}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                          {/* Initiator Asset Impact Card */}
+                          <div className="p-3 rounded-lg bg-[#14100E] border border-white/10 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-white flex items-center gap-1.5">
+                                <span
+                                  className="w-2.5 h-2.5 rounded-full inline-block"
+                                  style={{
+                                    backgroundColor:
+                                      initiator?.color || '#D4AF37',
+                                  }}
+                                />
+                                {initiator?.name} (You)
+                              </span>
+                              <motion.span
+                                key={`init-delta-${initiatorNetDelta}`}
+                                initial={{ scale: 0.85, opacity: 0.6 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-xs ${
+                                  initiatorNetDelta > 0
+                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                                    : initiatorNetDelta < 0
+                                    ? 'bg-red-950 text-red-300 border border-red-500/40'
+                                    : 'bg-stone-800 text-[#D4AF37] border border-[#D4AF37]/30'
+                                }`}
+                              >
+                                {initiatorNetDelta > 0 ? (
+                                  <TrendingUp className="w-3.5 h-3.5" />
+                                ) : initiatorNetDelta < 0 ? (
+                                  <TrendingDown className="w-3.5 h-3.5" />
+                                ) : null}
+                                {initiatorNetDelta > 0
+                                  ? `+$${initiatorNetDelta} Net`
+                                  : initiatorNetDelta < 0
+                                  ? `-$${Math.abs(initiatorNetDelta)} Net`
+                                  : '$0 Net Change'}
+                              </motion.span>
+                            </div>
+
+                            <div className="space-y-1 font-mono text-[11px] text-stone-300 pt-1 border-t border-white/10">
+                              <div className="flex justify-between">
+                                <span className="text-stone-400">
+                                  Current Total Assets:
+                                </span>
+                                <span>
+                                  ${initiatorCurrTotalAssets}{' '}
+                                  <span className="text-stone-500">
+                                    (${initiatorCurrCash} cash + $
+                                    {initiatorCurrPropVal} deeds)
+                                  </span>
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-stone-400">
+                                  Outgoing / Incoming:
+                                </span>
+                                <span>
+                                  <span className="text-red-400">
+                                    -${initiatorOutgoingTotal}
+                                  </span>{' '}
+                                  /{' '}
+                                  <span className="text-emerald-400">
+                                    +${initiatorIncomingTotal}
+                                  </span>
+                                </span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-white/10 font-bold text-white">
+                                <span>Post-Trade Total Assets:</span>
+                                <span className="text-[#D4AF37]">
+                                  ${initiatorPostTotalAssets}{' '}
+                                  <span className="text-[10px] font-normal text-stone-400">
+                                    (${initiatorPostCash} cash + $
+                                    {initiatorPostPropVal} deeds)
+                                  </span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Counterparty Asset Impact Card */}
+                          <div className="p-3 rounded-lg bg-[#14100E] border border-white/10 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-white flex items-center gap-1.5">
+                                <span
+                                  className="w-2.5 h-2.5 rounded-full inline-block"
+                                  style={{
+                                    backgroundColor:
+                                      partner?.color || '#10B981',
+                                  }}
+                                />
+                                {partner?.name || 'Counterparty'}
+                              </span>
+                              <motion.span
+                                key={`part-delta-${partnerNetDelta}`}
+                                initial={{ scale: 0.85, opacity: 0.6 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-xs ${
+                                  partnerNetDelta > 0
+                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                                    : partnerNetDelta < 0
+                                    ? 'bg-red-950 text-red-300 border border-red-500/40'
+                                    : 'bg-stone-800 text-[#D4AF37] border border-[#D4AF37]/30'
+                                }`}
+                              >
+                                {partnerNetDelta > 0 ? (
+                                  <TrendingUp className="w-3.5 h-3.5" />
+                                ) : partnerNetDelta < 0 ? (
+                                  <TrendingDown className="w-3.5 h-3.5" />
+                                ) : null}
+                                {partnerNetDelta > 0
+                                  ? `+$${partnerNetDelta} Net`
+                                  : partnerNetDelta < 0
+                                  ? `-$${Math.abs(partnerNetDelta)} Net`
+                                  : '$0 Net Change'}
+                              </motion.span>
+                            </div>
+
+                            <div className="space-y-1 font-mono text-[11px] text-stone-300 pt-1 border-t border-white/10">
+                              <div className="flex justify-between">
+                                <span className="text-stone-400">
+                                  Current Total Assets:
+                                </span>
+                                <span>
+                                  ${partnerCurrTotalAssets}{' '}
+                                  <span className="text-stone-500">
+                                    (${partnerCurrCash} cash + $
+                                    {partnerCurrPropVal} deeds)
+                                  </span>
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-stone-400">
+                                  Outgoing / Incoming:
+                                </span>
+                                <span>
+                                  <span className="text-red-400">
+                                    -${initiatorIncomingTotal}
+                                  </span>{' '}
+                                  /{' '}
+                                  <span className="text-emerald-400">
+                                    +${initiatorOutgoingTotal}
+                                  </span>
+                                </span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-white/10 font-bold text-white">
+                                <span>Post-Trade Total Assets:</span>
+                                <span className="text-[#D4AF37]">
+                                  ${partnerPostTotalAssets}{' '}
+                                  <span className="text-[10px] font-normal text-stone-400">
+                                    (${partnerPostCash} cash + $
+                                    {partnerPostPropVal} deeds)
+                                  </span>
+                                </span>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -3019,14 +3478,8 @@ export default function MonopolyApp() {
                           setTradeRequestProps([]);
                           setActiveModal('NONE');
                         }}
-                        disabled={
-                          !partner ||
-                          (tradeOfferCash === 0 &&
-                            tradeRequestCash === 0 &&
-                            tradeOfferProps.length === 0 &&
-                            tradeRequestProps.length === 0)
-                        }
-                        className="w-full py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-semibold text-xs hover:bg-[#e5c247] disabled:opacity-40 transition-colors"
+                        disabled={!partner || !hasAnySelection}
+                        className="w-full py-2.5 px-4 rounded-lg bg-[#D4AF37] text-[#0F0C0A] font-semibold text-xs hover:bg-[#e5c247] disabled:opacity-40 transition-colors cursor-pointer"
                       >
                         Transmit Official Trade Offer
                       </button>
