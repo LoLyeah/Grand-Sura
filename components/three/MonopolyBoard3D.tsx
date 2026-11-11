@@ -544,6 +544,27 @@ export default function MonopolyBoard3D({
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      cancelAnimationFrame(frameId);
+      clearTimeout(frameId);
+    };
+    const handleContextRestored = () => {
+      if (!unmounted) {
+        frameId = requestAnimationFrame(tick);
+      }
+    };
+    renderer.domElement.addEventListener(
+      'webglcontextlost',
+      handleContextLost,
+      false
+    );
+    renderer.domElement.addEventListener(
+      'webglcontextrestored',
+      handleContextRestored,
+      false
+    );
+
     const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
 
     // 2. Scene, Horizon Fog & Studio RoomEnvironment
@@ -1471,6 +1492,14 @@ export default function MonopolyBoard3D({
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointerup', handlePointerUp);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
+      renderer.domElement.removeEventListener(
+        'webglcontextlost',
+        handleContextLost
+      );
+      renderer.domElement.removeEventListener(
+        'webglcontextrestored',
+        handleContextRestored
+      );
       controls.dispose();
       renderer.dispose();
     };

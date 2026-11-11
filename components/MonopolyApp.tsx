@@ -145,12 +145,14 @@ export default function MonopolyApp() {
   // UI & Viewport Controls
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [activeModal, setActiveModal] = useState<ActiveModalTab>('NONE');
-  const [portfolioTab, setPortfolioTab] = useState<'HOLDINGS' | 'HISTORY'>(
-    'HOLDINGS'
-  );
+  const [portfolioTab, setPortfolioTab] = useState<
+    'HOLDINGS' | 'HISTORY' | 'TRADES'
+  >('HOLDINGS');
   const [historyCategoryFilter, setHistoryCategoryFilter] = useState<
     'ALL' | 'ROLL' | 'BUY' | 'RENT' | 'OTHER'
   >('ALL');
+  const [tradeHistoryPlayerFilter, setTradeHistoryPlayerFilter] =
+    useState<string>('ALL');
   const [selectedTileIndex, setSelectedTileIndex] = useState<number>(1);
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
   const [diceRollTrigger, setDiceRollTrigger] = useState(0);
@@ -889,16 +891,24 @@ export default function MonopolyApp() {
           {appPhase === 'START_MENU' ? (
             <div className="w-full max-w-4xl rounded-2xl bg-[#14100E] border-2 border-[#D4AF37]/60 shadow-2xl p-6 md:p-10 text-[#FAF6F0] space-y-6 my-auto">
               <div className="text-center space-y-2 border-b border-[#D4AF37]/25 pb-6">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#D4AF37]/15 border border-[#D4AF37]/40 text-xs font-bold text-[#D4AF37]">
-                  <span>SOVEREIGN WORLD LANDMARKS · 2 TO 16 PLAYERS</span>
+                <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-semibold text-[#D4AF37]">
+                  <span>Sovereign World Landmarks</span>
+                  <span aria-hidden="true" className="text-stone-500">
+                    ·
+                  </span>
+                  <span>2 to 16 Players</span>
+                  <span aria-hidden="true" className="text-stone-500">
+                    ·
+                  </span>
+                  <span>5 Board Scales (24 to 84 Spaces)</span>
                 </div>
                 <h1
-                  className="text-3xl md:text-5xl font-bold text-[#FAF6F0] tracking-tight"
+                  className="text-3xl md:text-5xl font-bold text-[#FAF6F0] tracking-tight text-balance"
                   style={{ fontFamily: 'var(--font-fraunces), serif' }}
                 >
                   Grand Estates 3D
                 </h1>
-                <p className="text-sm md:text-base text-stone-300 max-w-2xl mx-auto">
+                <p className="text-sm md:text-base text-stone-300 max-w-2xl mx-auto leading-relaxed">
                   Multiplayer 3D & 2D Luxury Landmark Monopoly with five board
                   scales (24 to 84 spaces for up to 16 players), periodic
                   macro-economic market events, and an optional AI Host.
@@ -2495,34 +2505,39 @@ export default function MonopolyApp() {
               </div>
             )}
 
-            {/* PORTFOLIO, BUILDING MANAGER & TURN HISTORY */}
+            {/* PORTFOLIO, BUILDING MANAGER, TURN HISTORY & TRADE HISTORY */}
             {activeModal === 'PORTFOLIO' && (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                   <div>
-                    <div className="text-xs text-[#D4AF37] font-medium flex flex-wrap items-center gap-3">
+                    <div className="text-xs text-[#D4AF37] font-medium flex flex-wrap items-center gap-2">
                       <span>Sovereign Asset Ledger, Construction & Activity</span>
+                      <span aria-hidden="true" className="text-stone-500">
+                        ·
+                      </span>
                       <button
                         onClick={() => setActiveModal('TRADE')}
-                        className="px-2.5 py-0.5 rounded bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-[#D4AF37] hover:text-[#0F0C0A] transition-colors font-semibold"
+                        className="text-[#D4AF37] underline underline-offset-4 hover:text-[#e5c247] transition-colors font-semibold whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         Open Trade Desk →
                       </button>
                     </div>
                     <h2
-                      className="text-xl font-bold"
+                      className="text-xl font-bold text-balance mt-0.5"
                       style={{ fontFamily: 'var(--font-fraunces), serif' }}
                     >
                       {portfolioTab === 'HOLDINGS'
                         ? `Player Holdings & Villas (${activeBoardConfig.shortLabel})`
-                        : `Turn History · Last 20 Actions (${activeBoardConfig.shortLabel})`}
+                        : portfolioTab === 'HISTORY'
+                        ? `Turn History · Last 20 Actions (${activeBoardConfig.shortLabel})`
+                        : `Bilateral Trade History (${activeBoardConfig.shortLabel})`}
                     </h2>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1 p-1 rounded-lg bg-[#0F0C0A] border border-white/10">
+                    <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-[#0F0C0A] border border-white/10">
                       <button
                         onClick={() => setPortfolioTab('HOLDINGS')}
-                        className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37] ${
                           portfolioTab === 'HOLDINGS'
                             ? 'bg-[#D4AF37] text-[#0F0C0A]'
                             : 'text-stone-300 hover:text-white'
@@ -2532,28 +2547,32 @@ export default function MonopolyApp() {
                       </button>
                       <button
                         onClick={() => setPortfolioTab('HISTORY')}
-                        className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37] ${
                           portfolioTab === 'HISTORY'
                             ? 'bg-[#D4AF37] text-[#0F0C0A]'
                             : 'text-stone-300 hover:text-white'
                         }`}
                       >
                         <Clock className="w-3.5 h-3.5" />
-                        <span>Turn History</span>
-                        <span
-                          className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
-                            portfolioTab === 'HISTORY'
-                              ? 'bg-[#0F0C0A]/20 text-[#0F0C0A]'
-                              : 'bg-white/10 text-[#D4AF37]'
-                          }`}
-                        >
-                          {Math.min(20, gameState.logs.length)}
+                        <span>Turn History ({Math.min(20, gameState.logs.length)})</span>
+                      </button>
+                      <button
+                        onClick={() => setPortfolioTab('TRADES')}
+                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37] ${
+                          portfolioTab === 'TRADES'
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'text-stone-300 hover:text-white'
+                        }`}
+                      >
+                        <span>
+                          Trade History ({(gameState.tradeHistory || []).length})
                         </span>
                       </button>
                     </div>
                     <button
                       onClick={() => setActiveModal('NONE')}
-                      className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10 cursor-pointer"
+                      aria-label="Close Portfolio Modal"
                     >
                       <X className="w-5 h-5" />
                     </button>
@@ -2574,13 +2593,13 @@ export default function MonopolyApp() {
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <span
-                                className="w-3 h-3 rounded-sm"
+                                className="w-3 h-3 rounded-xs shrink-0"
                                 style={{ backgroundColor: p.color }}
                               />
                               <span className="font-bold text-sm">{p.name}</span>
                               {p.bankrupt && (
-                                <span className="px-1.5 py-0.5 rounded bg-red-950/80 border border-red-500/40 text-[10px] font-bold text-red-300">
-                                  BANKRUPT
+                                <span className="text-[11px] font-semibold text-red-400">
+                                  · Bankrupt
                                 </span>
                               )}
                             </div>
@@ -2593,7 +2612,7 @@ export default function MonopolyApp() {
                               ${p.cash}
                             </span>
                           </div>
-                          <div className="text-xs text-stone-400">
+                          <div className="text-xs text-stone-400 tabular-nums">
                             Position: {activeTiles[p.position]?.name} ·{' '}
                             {owned.length} Deeds Owned
                           </div>
@@ -2617,7 +2636,7 @@ export default function MonopolyApp() {
                                         setSelectedTileIndex(pr.tileIndex);
                                         setActiveModal('DEED');
                                       }}
-                                      className="flex items-center gap-2 text-left hover:text-[#D4AF37]"
+                                      className="flex items-center gap-2 text-left hover:text-[#D4AF37] cursor-pointer"
                                     >
                                       <span
                                         className="w-2.5 h-2.5 rounded-xs shrink-0"
@@ -2627,7 +2646,8 @@ export default function MonopolyApp() {
                                         {t.shortName}
                                       </span>
                                       {pr.houses > 0 && (
-                                        <span className="text-emerald-400 font-mono">
+                                        <span className="text-emerald-400 font-mono tabular-nums">
+                                          ·{' '}
                                           {pr.houses === 5
                                             ? 'HOTEL'
                                             : `${pr.houses}V`}
@@ -2635,7 +2655,7 @@ export default function MonopolyApp() {
                                       )}
                                       {pr.mortgaged && (
                                         <span className="text-red-400">
-                                          MORTGAGED
+                                          · Mortgaged
                                         </span>
                                       )}
                                     </button>
@@ -2648,7 +2668,7 @@ export default function MonopolyApp() {
                                             tileIndex: pr.tileIndex,
                                           })
                                         }
-                                        className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-semibold text-[11px]"
+                                        className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-semibold text-[11px] whitespace-nowrap shrink-0 cursor-pointer"
                                       >
                                         +Build
                                       </button>
@@ -2666,7 +2686,7 @@ export default function MonopolyApp() {
                       );
                     })}
                   </div>
-                ) : (
+                ) : portfolioTab === 'HISTORY' ? (
                   /* TURN HISTORY VIEW (LAST 20 ACTIONS) */
                   (() => {
                     const last20Logs = gameState.logs.slice(0, 20);
@@ -2706,63 +2726,56 @@ export default function MonopolyApp() {
                       );
                     });
 
-                    const getBadgeMeta = (type: GameLogEntry['type']) => {
+                    const getActionCategoryLabel = (
+                      type: GameLogEntry['type']
+                    ) => {
                       switch (type) {
                         case 'ROLL':
-                          return {
-                            label: 'DICE ROLL',
-                            cls: 'bg-sky-950/90 text-sky-300 border-sky-500/40',
-                          };
+                          return { label: 'Dice Roll', color: 'text-sky-300' };
                         case 'BUY':
                           return {
-                            label: 'PURCHASE',
-                            cls: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40',
+                            label: 'Purchase',
+                            color: 'text-emerald-300',
                           };
                         case 'BUILD':
                           return {
-                            label: 'DEVELOPMENT',
-                            cls: 'bg-teal-950/90 text-teal-300 border-teal-500/40',
+                            label: 'Development',
+                            color: 'text-teal-300',
                           };
                         case 'AUCTION':
-                          return {
-                            label: 'AUCTION',
-                            cls: 'bg-amber-950/90 text-amber-300 border-amber-500/40',
-                          };
+                          return { label: 'Auction', color: 'text-amber-300' };
                         case 'RENT':
                           return {
-                            label: 'RENT / FEE',
-                            cls: 'bg-rose-950/90 text-rose-300 border-rose-500/40',
+                            label: 'Rent / Fee',
+                            color: 'text-rose-300',
                           };
                         case 'CARD':
                           return {
-                            label: 'DECREE CARD',
-                            cls: 'bg-purple-950/90 text-purple-300 border-purple-500/40',
+                            label: 'Decree Card',
+                            color: 'text-purple-300',
                           };
                         case 'JAIL':
                           return {
-                            label: 'DETENTION',
-                            cls: 'bg-orange-950/90 text-orange-300 border-orange-500/40',
+                            label: 'Detention',
+                            color: 'text-orange-300',
                           };
                         case 'TRADE':
                           return {
-                            label: 'TRADE DEAL',
-                            cls: 'bg-indigo-950/90 text-indigo-300 border-indigo-500/40',
+                            label: 'Trade Deal',
+                            color: 'text-indigo-300',
                           };
                         case 'EVENT':
                           return {
-                            label: 'MACRO EVENT',
-                            cls: 'bg-yellow-950/90 text-[#D4AF37] border-[#D4AF37]/50',
+                            label: 'Macro Event',
+                            color: 'text-[#D4AF37]',
                           };
                         case 'BANKRUPT':
                           return {
-                            label: 'BANKRUPTCY',
-                            cls: 'bg-red-950/90 text-red-300 border-red-500/50',
+                            label: 'Bankruptcy',
+                            color: 'text-red-400',
                           };
                         default:
-                          return {
-                            label: 'SYSTEM',
-                            cls: 'bg-stone-800 text-stone-300 border-white/15',
-                          };
+                          return { label: 'System', color: 'text-stone-400' };
                       }
                     };
 
@@ -2772,10 +2785,10 @@ export default function MonopolyApp() {
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                           <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
                             <div>
-                              <div className="text-[10px] font-semibold text-stone-400">
-                                DICE ROLLS
+                              <div className="text-[11px] font-medium text-stone-400">
+                                Dice Rolls
                               </div>
-                              <div className="text-base font-bold text-sky-300 font-mono">
+                              <div className="text-base font-bold text-sky-300 font-mono tabular-nums">
                                 {rollCount}
                               </div>
                             </div>
@@ -2783,10 +2796,10 @@ export default function MonopolyApp() {
                           </div>
                           <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
                             <div>
-                              <div className="text-[10px] font-semibold text-stone-400">
-                                DEEDS & BUILDS
+                              <div className="text-[11px] font-medium text-stone-400">
+                                Deeds & Builds
                               </div>
-                              <div className="text-base font-bold text-emerald-300 font-mono">
+                              <div className="text-base font-bold text-emerald-300 font-mono tabular-nums">
                                 {buyCount}
                               </div>
                             </div>
@@ -2794,10 +2807,10 @@ export default function MonopolyApp() {
                           </div>
                           <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
                             <div>
-                              <div className="text-[10px] font-semibold text-stone-400">
-                                RENT PAYMENTS
+                              <div className="text-[11px] font-medium text-stone-400">
+                                Rent Payments
                               </div>
-                              <div className="text-base font-bold text-rose-300 font-mono">
+                              <div className="text-base font-bold text-rose-300 font-mono tabular-nums">
                                 {rentCount}
                               </div>
                             </div>
@@ -2805,10 +2818,10 @@ export default function MonopolyApp() {
                           </div>
                           <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
                             <div>
-                              <div className="text-[10px] font-semibold text-stone-400">
-                                CARDS & EVENTS
+                              <div className="text-[11px] font-medium text-stone-400">
+                                Cards & Events
                               </div>
-                              <div className="text-base font-bold text-[#D4AF37] font-mono">
+                              <div className="text-base font-bold text-[#D4AF37] font-mono tabular-nums">
                                 {otherCount}
                               </div>
                             </div>
@@ -2834,7 +2847,7 @@ export default function MonopolyApp() {
                               <button
                                 key={fKey}
                                 onClick={() => setHistoryCategoryFilter(fKey)}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                                   historyCategoryFilter === fKey
                                     ? 'bg-[#D4AF37] text-[#0F0C0A]'
                                     : 'bg-[#0F0C0A] text-stone-300 border border-white/10 hover:border-white/30'
@@ -2844,7 +2857,7 @@ export default function MonopolyApp() {
                               </button>
                             ))}
                           </div>
-                          <span className="text-[11px] font-mono text-stone-400">
+                          <span className="text-[11px] font-mono text-stone-400 tabular-nums">
                             Completed Turns: {gameState.completedTurns}
                           </span>
                         </div>
@@ -2861,7 +2874,9 @@ export default function MonopolyApp() {
                               const overallIdx = last20Logs.findIndex(
                                 (item) => item.id === entry.id
                               );
-                              const badge = getBadgeMeta(entry.type);
+                              const catMeta = getActionCategoryLabel(
+                                entry.type
+                              );
                               const matchedPlayer = gameState.players.find(
                                 (p) => entry.text.startsWith(p.name)
                               );
@@ -2878,45 +2893,428 @@ export default function MonopolyApp() {
                                   key={entry.id}
                                   className={`p-3 rounded-xl border transition-colors flex items-start justify-between gap-3 ${
                                     overallIdx === 0
-                                      ? 'bg-[#1B1510] border-[#D4AF37]/50 shadow-sm'
+                                      ? 'bg-[#1B1510] border-[#D4AF37]/50'
                                       : 'bg-[#0F0C0A] border-white/10'
                                   }`}
                                 >
                                   <div className="flex items-start gap-2.5 min-w-0">
-                                    <div className="flex flex-col items-center gap-1 shrink-0 pt-0.5">
-                                      <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] font-mono text-stone-400">
-                                        #{overallIdx + 1}
-                                      </span>
-                                      {matchedPlayer && (
-                                        <span
-                                          className="w-2.5 h-2.5 rounded-xs"
-                                          style={{
-                                            backgroundColor:
-                                              matchedPlayer.color,
-                                          }}
-                                          title={matchedPlayer.name}
-                                        />
-                                      )}
-                                    </div>
+                                    {matchedPlayer && (
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-xs shrink-0 mt-1"
+                                        style={{
+                                          backgroundColor: matchedPlayer.color,
+                                        }}
+                                        title={matchedPlayer.name}
+                                      />
+                                    )}
                                     <div className="space-y-1 min-w-0">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <span
-                                          className={`px-2 py-0.5 rounded border text-[10px] font-bold tracking-wide ${badge.cls}`}
-                                        >
-                                          {badge.label}
+                                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-stone-400 tabular-nums">
+                                        <span className="font-mono text-stone-500">
+                                          #{overallIdx + 1}
                                         </span>
-                                        {overallIdx === 0 && (
-                                          <span className="px-1.5 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] text-[10px] font-extrabold">
-                                            LATEST
-                                          </span>
-                                        )}
-                                        <span className="text-[11px] font-mono text-stone-400">
+                                        <span aria-hidden="true">·</span>
+                                        <span
+                                          className={`font-semibold ${catMeta.color}`}
+                                        >
+                                          {catMeta.label}
+                                        </span>
+                                        <span aria-hidden="true">·</span>
+                                        <span className="font-mono">
                                           {formattedTime}
                                         </span>
+                                        {overallIdx === 0 && (
+                                          <>
+                                            <span aria-hidden="true">·</span>
+                                            <span className="font-bold text-[#D4AF37]">
+                                              Latest Action
+                                            </span>
+                                          </>
+                                        )}
                                       </div>
                                       <p className="text-xs text-stone-100 leading-relaxed break-words">
                                         {entry.text}
                                       </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  /* BILATERAL TRADE HISTORY VIEW */
+                  (() => {
+                    const allTrades = gameState.tradeHistory || [];
+                    const filteredTrades = allTrades.filter((t) => {
+                      if (tradeHistoryPlayerFilter === 'ALL') return true;
+                      return (
+                        t.fromPlayerId === tradeHistoryPlayerFilter ||
+                        t.toPlayerId === tradeHistoryPlayerFilter
+                      );
+                    });
+
+                    const totalVolume = allTrades.reduce(
+                      (sum, t) => sum + t.offerTotalValue + t.requestTotalValue,
+                      0
+                    );
+                    const totalDeedsSwapped = allTrades.reduce(
+                      (sum, t) =>
+                        sum +
+                        t.offerProperties.length +
+                        t.requestProperties.length,
+                      0
+                    );
+                    const peakSwing = allTrades.reduce(
+                      (max, t) =>
+                        Math.max(max, Math.abs(t.fromNetAssetDelta)),
+                      0
+                    );
+
+                    return (
+                      <div className="space-y-3">
+                        {/* Summary Metrics Strip for Completed Bilateral Trades */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10">
+                            <div className="text-[11px] font-medium text-stone-400">
+                              Completed Deals
+                            </div>
+                            <div className="text-base font-bold text-[#D4AF37] font-mono tabular-nums mt-0.5">
+                              {allTrades.length}
+                            </div>
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10">
+                            <div className="text-[11px] font-medium text-stone-400">
+                              Gross Volume Traded
+                            </div>
+                            <div className="text-base font-bold text-emerald-300 font-mono tabular-nums mt-0.5">
+                              ${totalVolume}
+                            </div>
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10">
+                            <div className="text-[11px] font-medium text-stone-400">
+                              Deeds Transferred
+                            </div>
+                            <div className="text-base font-bold text-sky-300 font-mono tabular-nums mt-0.5">
+                              {totalDeedsSwapped}
+                            </div>
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10">
+                            <div className="text-[11px] font-medium text-stone-400">
+                              Largest Net Asset Swing
+                            </div>
+                            <div className="text-base font-bold text-amber-300 font-mono tabular-nums mt-0.5">
+                              ${peakSwing}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Participant Filter Bar */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              onClick={() => setTradeHistoryPlayerFilter('ALL')}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                tradeHistoryPlayerFilter === 'ALL'
+                                  ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                                  : 'bg-[#0F0C0A] text-stone-300 border border-white/10 hover:border-white/30'
+                              }`}
+                            >
+                              All Syndicates ({allTrades.length})
+                            </button>
+                            {gameState.players.map((p) => {
+                              const pTradeCount = allTrades.filter(
+                                (t) =>
+                                  t.fromPlayerId === p.id ||
+                                  t.toPlayerId === p.id
+                              ).length;
+                              return (
+                                <button
+                                  key={p.id}
+                                  onClick={() =>
+                                    setTradeHistoryPlayerFilter(p.id)
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                                    tradeHistoryPlayerFilter === p.id
+                                      ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                                      : 'bg-[#0F0C0A] text-stone-300 border border-white/10 hover:border-white/30'
+                                  }`}
+                                >
+                                  <span
+                                    className="w-2 h-2 rounded-xs shrink-0"
+                                    style={{ backgroundColor: p.color }}
+                                  />
+                                  <span>
+                                    {p.name.split(' ')[0]} ({pTradeCount})
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            onClick={() => setActiveModal('TRADE')}
+                            className="px-3 py-1 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-semibold hover:bg-[#e5c247] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            + Propose New Trade
+                          </button>
+                        </div>
+
+                        {/* Completed Bilateral Trades List */}
+                        <div className="space-y-2.5 max-h-[52vh] overflow-y-auto pr-1">
+                          {filteredTrades.length === 0 ? (
+                            <div className="p-6 rounded-xl bg-[#0F0C0A] border border-white/10 text-center space-y-2">
+                              <p className="text-xs text-stone-400">
+                                {allTrades.length === 0
+                                  ? 'No bilateral trades have been completed in this match yet.'
+                                  : 'No completed trades match the selected syndicate filter.'}
+                              </p>
+                              <button
+                                onClick={() => setActiveModal('TRADE')}
+                                className="px-3.5 py-1.5 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-semibold hover:bg-[#e5c247] transition-colors cursor-pointer"
+                              >
+                                Open Mergers & Acquisitions Trade Desk
+                              </button>
+                            </div>
+                          ) : (
+                            filteredTrades.map((record, idx) => {
+                              const tradeDate = new Date(record.timestamp);
+                              const dateStr = tradeDate.toLocaleDateString([], {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                              });
+                              const timeStr = tradeDate.toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              });
+                              const dealNumber = allTrades.length - idx;
+
+                              return (
+                                <div
+                                  key={record.id}
+                                  className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-3"
+                                >
+                                  {/* Unboxed Metadata Header: Deal #, Date, Time, Turn, Participating Players */}
+                                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
+                                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                                      <span className="font-mono font-bold text-[#D4AF37] tabular-nums">
+                                        Deal #{dealNumber}
+                                      </span>
+                                      <span
+                                        aria-hidden="true"
+                                        className="text-stone-600"
+                                      >
+                                        ·
+                                      </span>
+                                      <span className="flex items-center gap-1.5 font-semibold text-white">
+                                        <span
+                                          className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                          style={{
+                                            backgroundColor:
+                                              record.fromPlayerColor,
+                                          }}
+                                        />
+                                        <span>{record.fromPlayerName}</span>
+                                      </span>
+                                      <span className="text-stone-400">⇄</span>
+                                      <span className="flex items-center gap-1.5 font-semibold text-white">
+                                        <span
+                                          className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                          style={{
+                                            backgroundColor:
+                                              record.toPlayerColor,
+                                          }}
+                                        />
+                                        <span>{record.toPlayerName}</span>
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 text-[11px] text-stone-400 font-mono tabular-nums">
+                                      <span>Turn #{record.turnNumber}</span>
+                                      <span aria-hidden="true">·</span>
+                                      <span>{dateStr}</span>
+                                      <span aria-hidden="true">·</span>
+                                      <span>{timeStr}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Bilateral Package & Net Asset Change Grid */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                    {/* Initiator Column */}
+                                    <div className="p-3 rounded-lg bg-[#14100E] border border-white/5 space-y-2">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-semibold text-stone-200 flex items-center gap-1.5 truncate">
+                                          <span
+                                            className="w-2 h-2 rounded-xs shrink-0"
+                                            style={{
+                                              backgroundColor:
+                                                record.fromPlayerColor,
+                                            }}
+                                          />
+                                          <span className="truncate">
+                                            {record.fromPlayerName}
+                                          </span>
+                                        </span>
+                                        <span
+                                          className={`font-mono font-bold tabular-nums shrink-0 ${
+                                            record.fromNetAssetDelta > 0
+                                              ? 'text-emerald-400'
+                                              : record.fromNetAssetDelta < 0
+                                              ? 'text-red-400'
+                                              : 'text-[#D4AF37]'
+                                          }`}
+                                        >
+                                          Net Asset Change:{' '}
+                                          {record.fromNetAssetDelta > 0
+                                            ? `+$${record.fromNetAssetDelta}`
+                                            : record.fromNetAssetDelta < 0
+                                            ? `-$${Math.abs(record.fromNetAssetDelta)}`
+                                            : '$0'}
+                                        </span>
+                                      </div>
+
+                                      <div className="text-[11px] text-stone-400 border-t border-white/5 pt-1.5 space-y-1">
+                                        <div className="flex justify-between font-mono tabular-nums">
+                                          <span>
+                                            Transferred to {record.toPlayerName}:
+                                          </span>
+                                          <span className="text-stone-200 font-semibold">
+                                            ${record.offerTotalValue} total
+                                          </span>
+                                        </div>
+                                        {record.offerCash > 0 && (
+                                          <div className="font-mono text-emerald-400 tabular-nums">
+                                            • ${record.offerCash} Cash
+                                          </div>
+                                        )}
+                                        {record.offerProperties.map((prop) => (
+                                          <button
+                                            key={prop.tileIndex}
+                                            onClick={() => {
+                                              setSelectedTileIndex(
+                                                prop.tileIndex
+                                              );
+                                              setActiveModal('DEED');
+                                            }}
+                                            className="w-full flex items-center justify-between gap-2 text-left text-stone-200 hover:text-[#D4AF37] cursor-pointer"
+                                          >
+                                            <span className="flex items-center gap-1.5 truncate">
+                                              <span
+                                                className="w-2 h-2 rounded-xs shrink-0"
+                                                style={{
+                                                  backgroundColor:
+                                                    prop.colorHex,
+                                                }}
+                                              />
+                                              <span className="truncate">
+                                                {prop.name}
+                                              </span>
+                                            </span>
+                                            <span className="font-mono text-stone-400 tabular-nums shrink-0">
+                                              ${prop.value}
+                                            </span>
+                                          </button>
+                                        ))}
+                                        {record.offerCash === 0 &&
+                                          record.offerProperties.length ===
+                                            0 && (
+                                            <div className="text-stone-500 italic">
+                                              No cash or deeds outgoing
+                                            </div>
+                                          )}
+                                      </div>
+                                    </div>
+
+                                    {/* Counterparty Column */}
+                                    <div className="p-3 rounded-lg bg-[#14100E] border border-white/5 space-y-2">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-semibold text-stone-200 flex items-center gap-1.5 truncate">
+                                          <span
+                                            className="w-2 h-2 rounded-xs shrink-0"
+                                            style={{
+                                              backgroundColor:
+                                                record.toPlayerColor,
+                                            }}
+                                          />
+                                          <span className="truncate">
+                                            {record.toPlayerName}
+                                          </span>
+                                        </span>
+                                        <span
+                                          className={`font-mono font-bold tabular-nums shrink-0 ${
+                                            record.toNetAssetDelta > 0
+                                              ? 'text-emerald-400'
+                                              : record.toNetAssetDelta < 0
+                                              ? 'text-red-400'
+                                              : 'text-[#D4AF37]'
+                                          }`}
+                                        >
+                                          Net Asset Change:{' '}
+                                          {record.toNetAssetDelta > 0
+                                            ? `+$${record.toNetAssetDelta}`
+                                            : record.toNetAssetDelta < 0
+                                            ? `-$${Math.abs(record.toNetAssetDelta)}`
+                                            : '$0'}
+                                        </span>
+                                      </div>
+
+                                      <div className="text-[11px] text-stone-400 border-t border-white/5 pt-1.5 space-y-1">
+                                        <div className="flex justify-between font-mono tabular-nums">
+                                          <span>
+                                            Transferred to{' '}
+                                            {record.fromPlayerName}:
+                                          </span>
+                                          <span className="text-stone-200 font-semibold">
+                                            ${record.requestTotalValue} total
+                                          </span>
+                                        </div>
+                                        {record.requestCash > 0 && (
+                                          <div className="font-mono text-[#D4AF37] tabular-nums">
+                                            • ${record.requestCash} Cash
+                                          </div>
+                                        )}
+                                        {record.requestProperties.map(
+                                          (prop) => (
+                                            <button
+                                              key={prop.tileIndex}
+                                              onClick={() => {
+                                                setSelectedTileIndex(
+                                                  prop.tileIndex
+                                                );
+                                                setActiveModal('DEED');
+                                              }}
+                                              className="w-full flex items-center justify-between gap-2 text-left text-stone-200 hover:text-[#D4AF37] cursor-pointer"
+                                            >
+                                              <span className="flex items-center gap-1.5 truncate">
+                                                <span
+                                                  className="w-2 h-2 rounded-xs shrink-0"
+                                                  style={{
+                                                    backgroundColor:
+                                                      prop.colorHex,
+                                                  }}
+                                                />
+                                                <span className="truncate">
+                                                  {prop.name}
+                                                </span>
+                                              </span>
+                                              <span className="font-mono text-stone-400 tabular-nums shrink-0">
+                                                ${prop.value}
+                                              </span>
+                                            </button>
+                                          )
+                                        )}
+                                        {record.requestCash === 0 &&
+                                          record.requestProperties.length ===
+                                            0 && (
+                                            <div className="text-stone-500 italic">
+                                              No cash or deeds outgoing
+                                            </div>
+                                          )}
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
@@ -2934,13 +3332,26 @@ export default function MonopolyApp() {
             {/* BILATERAL TRADE DESK */}
             {activeModal === 'TRADE' && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                   <div>
-                    <div className="text-xs text-[#D4AF37] font-medium">
-                      Mergers & Acquisitions Desk
+                    <div className="text-xs text-[#D4AF37] font-medium flex flex-wrap items-center gap-2">
+                      <span>Mergers & Acquisitions Desk</span>
+                      <span aria-hidden="true" className="text-stone-500">
+                        ·
+                      </span>
+                      <button
+                        onClick={() => {
+                          setPortfolioTab('TRADES');
+                          setActiveModal('PORTFOLIO');
+                        }}
+                        className="text-[#D4AF37] underline underline-offset-4 hover:text-[#e5c247] transition-colors font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        View Trade History (
+                        {(gameState.tradeHistory || []).length}) →
+                      </button>
                     </div>
                     <h2
-                      className="text-xl font-bold"
+                      className="text-xl font-bold text-balance mt-0.5"
                       style={{ fontFamily: 'var(--font-fraunces), serif' }}
                     >
                       Propose Deed & Cash Trade
@@ -2948,7 +3359,8 @@ export default function MonopolyApp() {
                   </div>
                   <button
                     onClick={() => setActiveModal('NONE')}
-                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10 cursor-pointer"
+                    aria-label="Close Trade Modal"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -3305,7 +3717,7 @@ export default function MonopolyApp() {
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-white flex items-center gap-1.5">
                                 <span
-                                  className="w-2.5 h-2.5 rounded-full inline-block"
+                                  className="w-2.5 h-2.5 rounded-xs inline-block"
                                   style={{
                                     backgroundColor:
                                       initiator?.color || '#D4AF37',
@@ -3317,7 +3729,7 @@ export default function MonopolyApp() {
                                 key={`init-delta-${initiatorNetDelta}`}
                                 initial={{ scale: 0.85, opacity: 0.6 }}
                                 animate={{ scale: 1, opacity: 1 }}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-xs ${
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-xs tabular-nums ${
                                   initiatorNetDelta > 0
                                     ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
                                     : initiatorNetDelta < 0
@@ -3338,7 +3750,7 @@ export default function MonopolyApp() {
                               </motion.span>
                             </div>
 
-                            <div className="space-y-1 font-mono text-[11px] text-stone-300 pt-1 border-t border-white/10">
+                            <div className="space-y-1 font-mono text-[11px] text-stone-300 pt-1 border-t border-white/10 tabular-nums">
                               <div className="flex justify-between">
                                 <span className="text-stone-400">
                                   Current Total Assets:
@@ -3383,7 +3795,7 @@ export default function MonopolyApp() {
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-white flex items-center gap-1.5">
                                 <span
-                                  className="w-2.5 h-2.5 rounded-full inline-block"
+                                  className="w-2.5 h-2.5 rounded-xs inline-block"
                                   style={{
                                     backgroundColor:
                                       partner?.color || '#10B981',
@@ -4601,20 +5013,34 @@ export default function MonopolyApp() {
             <div className="flex items-center gap-3 shrink-0">
               <button
                 onClick={() => {
+                  setPortfolioTab('TRADES');
+                  setActiveModal('PORTFOLIO');
+                }}
+                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap cursor-pointer"
+              >
+                Trade History ({(gameState.tradeHistory || []).length})
+              </button>
+              <span aria-hidden="true" className="text-white/15">
+                ·
+              </span>
+              <button
+                onClick={() => {
                   setPortfolioTab('HISTORY');
                   setActiveModal('PORTFOLIO');
                 }}
-                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap flex items-center gap-1"
+                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap flex items-center gap-1 cursor-pointer"
               >
                 <Clock className="w-3 h-3 text-[#D4AF37]" />
                 <span>
                   Turn History ({Math.min(20, gameState.logs.length)})
                 </span>
               </button>
-              <span className="text-white/15">·</span>
+              <span aria-hidden="true" className="text-white/15">
+                ·
+              </span>
               <button
                 onClick={() => setActiveModal('HOST')}
-                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap"
+                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap cursor-pointer"
               >
                 {gameState.hostConfig.enabled
                   ? `${gameState.hostConfig.gender} · Customize Host`

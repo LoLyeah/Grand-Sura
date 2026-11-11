@@ -60,6 +60,36 @@ export interface TradeOffer {
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
 }
 
+export interface CompletedTradeRecord {
+  id: string;
+  timestamp: number;
+  turnNumber: number;
+  fromPlayerId: string;
+  fromPlayerName: string;
+  fromPlayerColor: string;
+  toPlayerId: string;
+  toPlayerName: string;
+  toPlayerColor: string;
+  offerCash: number;
+  requestCash: number;
+  offerProperties: {
+    tileIndex: number;
+    name: string;
+    colorHex: string;
+    value: number;
+  }[];
+  requestProperties: {
+    tileIndex: number;
+    name: string;
+    colorHex: string;
+    value: number;
+  }[];
+  offerTotalValue: number;
+  requestTotalValue: number;
+  fromNetAssetDelta: number;
+  toNetAssetDelta: number;
+}
+
 export interface ActiveGlobalEventState {
   event: GlobalEventDefinition;
   remainingTurns: number;
@@ -137,6 +167,7 @@ export interface GameRoomState {
   turnStartedAt: number;
   winnerId: string | null;
   logs: GameLogEntry[];
+  tradeHistory: CompletedTradeRecord[];
   hostConfig: HostConfig;
   lastHeadlineEvent: string | null;
   version: number;
@@ -208,6 +239,7 @@ export function createInitialGameRoom(
         important: true,
       },
     ],
+    tradeHistory: [],
     hostConfig,
     lastHeadlineEvent: `The Grand Estates match has begun on the ${boardConfig.name} with ${players.map((p) => p.name).join(', ')}. ${players[0]?.name || 'Player 1'} is first to roll!`,
     version: 1,
@@ -1049,6 +1081,7 @@ export function applyGameAction(
     state.properties = createInitialProperties(newSize);
     state.activeAuction = null;
     state.activeTrade = null;
+    state.tradeHistory = [];
     state.drawnCard = null;
     state.turnNotice = null;
     state.phase = 'ROLL';
@@ -1569,6 +1602,49 @@ export function applyGameAction(
         fromP.cash >= trade.offerCash &&
         toP.cash >= trade.requestCash
       ) {
+        const computeDeedVal = (idx: number) => {
+          const pr = state.properties[idx];
+          const t = tiles[idx];
+          if (!t) return 0;
+          const base = t.price || 0;
+          const deedVal = pr?.mortgaged ? Math.floor(base * 0.5) : base;
+          const buildVal = (pr?.houses || 0) * (t.houseCost || 0);
+          return deedVal + buildVal;
+        };
+
+        const offerPropDetails = trade.offerProperties.map((idx) => {
+          const t = tiles[idx];
+          return {
+            tileIndex: idx,
+            name: t?.name || `Space #${idx}`,
+            colorHex: t?.colorHex || '#D4AF37',
+            value: computeDeedVal(idx),
+          };
+        });
+
+        const requestPropDetails = trade.requestProperties.map((idx) => {
+          const t = tiles[idx];
+          return {
+            tileIndex: idx,
+            name: t?.name || `Space #${idx}`,
+            colorHex: t?.colorHex || '#D4AF37',
+            value: computeDeedVal(idx),
+          };
+        });
+
+        const offerPropsSum = offerPropDetails.reduce(
+          (sum, d) => sum + d.value,
+          0
+        );
+        const requestPropsSum = requestPropDetails.reduce(
+          (sum, d) => sum + d.value,
+          0
+        );
+        const offerTotalValue = trade.offerCash + offerPropsSum;
+        const requestTotalValue = trade.requestCash + requestPropsSum;
+        const fromNetAssetDelta = requestTotalValue - offerTotalValue;
+        const toNetAssetDelta = offerTotalValue - requestTotalValue;
+
         fromP.cash = fromP.cash - trade.offerCash + trade.requestCash;
         toP.cash = toP.cash - trade.requestCash + trade.offerCash;
 
@@ -1582,9 +1658,33 @@ export function applyGameAction(
             state.properties[idx].ownerId = fromP.id;
           }
         }
+
+        if (!state.tradeHistory) {
+          state.tradeHistory = [];
+        }
+        state.tradeHistory.unshift({
+          id: trade.id || `trade-${Date.now()}`,
+          timestamp: Date.now(),
+          turnNumber: state.completedTurns + 1,
+          fromPlayerId: fromP.id,
+          fromPlayerName: fromP.name,
+          fromPlayerColor: fromP.color,
+          toPlayerId: toP.id,
+          toPlayerName: toP.name,
+          toPlayerColor: toP.color,
+          offerCash: trade.offerCash,
+          requestCash: trade.requestCash,
+          offerProperties: offerPropDetails,
+          requestProperties: requestPropDetails,
+          offerTotalValue,
+          requestTotalValue,
+          fromNetAssetDelta,
+          toNetAssetDelta,
+        });
+
         addLog(
           state,
-          `Deal closed! ${toP.name} accepted the portfolio trade with ${fromP.name}!`,
+          `Deal closed! ${toP.name} accepted the portfolio trade with ${fromP.name} (${fromNetAssetDelta >= 0 ? `+$${fromNetAssetDelta}` : `-$${Math.abs(fromNetAssetDelta)}`} net for ${fromP.name})!`,
           'TRADE',
           true
         );

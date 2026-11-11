@@ -180,41 +180,46 @@ export default function MonopolyBoard2D({
   return (
     <div className="fixed inset-0 top-14 bottom-24 z-10 overflow-auto bg-[#0F0C0A] px-3 py-2 md:px-6 md:py-3 flex flex-col items-center justify-start select-none">
       {/* Top Toolbar for 2D Board Readability & Board Size Switcher */}
-      <div className="w-full max-w-[1440px] flex flex-wrap items-center justify-between gap-2 mb-2 px-3 py-2 rounded-xl bg-[#14100E] border border-[#D4AF37]/30 text-xs text-[#FAF6F0]">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-bold text-[#D4AF37] flex items-center gap-1.5">
-            <Layers className="w-4 h-4" />
-            <span>2D High-Contrast Tabletop</span>
+      <div className="w-full max-w-[1440px] flex flex-wrap items-center justify-between gap-3 mb-2 px-4 py-2.5 rounded-xl bg-[#14100E] border border-[#D4AF37]/30 text-xs text-[#FAF6F0]">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-stone-300">
+          <span className="font-bold text-[#D4AF37] whitespace-nowrap">
+            2D High-Contrast Tabletop
           </span>
-          <span className="text-stone-500">·</span>
-          <span className="text-stone-300 font-medium">
+          <span aria-hidden="true" className="text-stone-500">
+            ·
+          </span>
+          <span className="font-medium text-[#FAF6F0] whitespace-nowrap">
             {boardConfig.name}
           </span>
-          <span className="px-2 py-0.5 rounded bg-[#D4AF37]/15 border border-[#D4AF37]/40 text-[#D4AF37] font-semibold flex items-center gap-1">
-            <Users className="w-3.5 h-3.5" />
+          <span aria-hidden="true" className="text-stone-500">
+            ·
+          </span>
+          <span className="text-stone-300 whitespace-nowrap">
             {boardConfig.recommendedPlayers}
           </span>
+          <span aria-hidden="true" className="text-stone-500">
+            ·
+          </span>
           <span
-            className="px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-500/35 text-emerald-300 font-semibold flex items-center gap-1.5"
+            className="text-emerald-300 font-medium tabular-nums whitespace-nowrap"
             title="Tiles with at least one active player are highlighted with a warm gold glow and player beacon"
           >
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>
-              Occupied Spaces:{' '}
-              {
-                new Set(
-                  gameState.players
-                    .filter((p) => !p.bankrupt)
-                    .map((p) => visualPositions[p.id] ?? p.position)
-                ).size
-              }
-            </span>
+            Occupied Spaces:{' '}
+            {
+              new Set(
+                gameState.players
+                  .filter((p) => !p.bankrupt)
+                  .map((p) => visualPositions[p.id] ?? p.position)
+              ).size
+            }
           </span>
         </div>
 
         {/* Quick Board Size Selector with Recommended Player Counts */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-stone-400 text-[11px] mr-1">Board Size:</span>
+          <span className="text-stone-400 text-[11px] mr-1 whitespace-nowrap">
+            Board Size:
+          </span>
           {(
             [
               'MINI',
@@ -235,7 +240,7 @@ export default function MonopolyBoard2D({
                     boardSize: sizeId,
                   })
                 }
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1.5 ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37] ${
                   active
                     ? 'bg-[#D4AF37] text-[#0F0C0A]'
                     : 'bg-[#0F0C0A] text-stone-300 border border-white/10 hover:border-[#D4AF37]/50'
@@ -244,7 +249,7 @@ export default function MonopolyBoard2D({
               >
                 <span>{cfg.shortLabel}</span>
                 <span
-                  className={`text-[10px] ${
+                  className={`text-[10px] tabular-nums ${
                     active ? 'text-[#0F0C0A]/80' : 'text-[#D4AF37]'
                   }`}
                 >
@@ -256,7 +261,7 @@ export default function MonopolyBoard2D({
 
           <button
             onClick={() => setZoomedMode((z) => !z)}
-            className="px-2.5 py-1 rounded-lg bg-[#0F0C0A] border border-white/15 text-stone-200 hover:border-[#D4AF37] text-[11px] font-semibold flex items-center gap-1"
+            className="px-2.5 py-1 rounded-lg bg-[#0F0C0A] border border-white/15 text-stone-200 hover:border-[#D4AF37] text-[11px] font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37]"
             title="Toggle Extra-Large Tile Text Zoom"
           >
             {zoomedMode ? (
@@ -274,7 +279,7 @@ export default function MonopolyBoard2D({
 
           <button
             onClick={onSwitchTo3D}
-            className="px-2.5 py-1 rounded-lg bg-stone-800 text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-stone-700 text-[11px] font-semibold"
+            className="px-2.5 py-1 rounded-lg bg-stone-800 text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-stone-700 text-[11px] font-semibold whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37]"
           >
             Switch to 3D View
           </button>
