@@ -32,6 +32,8 @@ interface MonopolyBoard3DProps {
   cameraPreset: CameraPreset;
   onUserOrbitStart: () => void;
   diceRollTrigger: number;
+  show3DLabelsOverlay?: boolean;
+  show3DCornerInspector?: boolean;
 }
 
 // Pre-allocated scratch math helpers at module scope (zero GC in render loop)
@@ -46,6 +48,8 @@ export default function MonopolyBoard3D({
   cameraPreset,
   onUserOrbitStart,
   diceRollTrigger,
+  show3DLabelsOverlay = false,
+  show3DCornerInspector = false,
 }: MonopolyBoard3DProps) {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const labelNodesRef = useRef<(HTMLButtonElement | null)[]>([]);
@@ -54,8 +58,6 @@ export default function MonopolyBoard3D({
   const [hoveredTileIdx, setHoveredTileIdx] = React.useState<number | null>(
     null
   );
-  const [show3DLabelsOverlay, setShow3DLabelsOverlay] =
-    React.useState<boolean>(true);
 
   // Store latest props & callbacks in refs so the WebGL canvas never re-mounts
   const gameStateRef = useRef<GameRoomState>(gameState);
@@ -1447,9 +1449,8 @@ export default function MonopolyBoard3D({
       controls.update();
       renderer.render(scene, camera);
 
-      // Project 3D Tile coordinates to 2D Screen Space for Crisp HTML Labels in Top-Down / Label mode
-      const shouldShowLabels =
-        cameraPresetRef.current === 'TOP_DOWN' || show3DLabelsRef.current;
+      // Project 3D Tile coordinates to 2D Screen Space for Crisp HTML Labels only when enabled in Settings
+      const shouldShowLabels = Boolean(show3DLabelsRef.current);
       const cw = container?.clientWidth || window.innerWidth;
       const ch = container?.clientHeight || window.innerHeight;
       const labelNodes = labelNodesRef.current;
@@ -1651,24 +1652,9 @@ export default function MonopolyBoard3D({
         </div>
       </div>
 
-      {/* 3. Top-Left 3D Readability HUD: Toggle 3D Crisp Labels + Live Hovered/Selected Tile Magnifier */}
-      <div className="fixed top-16 left-4 z-15 flex flex-col gap-2 max-w-xs pointer-events-auto">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShow3DLabelsOverlay((v) => !v)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold border shadow-lg transition-colors ${
-              show3DLabelsOverlay || cameraPreset === 'TOP_DOWN'
-                ? 'bg-[#D4AF37] text-[#0F0C0A] border-[#D4AF37]'
-                : 'bg-[#14100E] text-[#FAF6F0] border-[#D4AF37]/40 hover:border-[#D4AF37]'
-            }`}
-          >
-            {show3DLabelsOverlay || cameraPreset === 'TOP_DOWN'
-              ? '3D Crisp Text Labels: ON'
-              : '3D Crisp Text Labels: OFF'}
-          </button>
-        </div>
-
-        {inspectedTile && (
+      {/* 3. Optional Top-Left 3D Tile Inspector (Controlled via User Settings — Default OFF) */}
+      {show3DCornerInspector && inspectedTile && (
+        <div className="fixed top-16 left-4 z-15 flex flex-col gap-2 max-w-xs pointer-events-auto">
           <div className="rounded-xl bg-[#14100E] border-2 border-[#D4AF37]/60 shadow-2xl p-3 text-[#FAF6F0] space-y-1.5">
             <div className="flex items-center justify-between gap-2 text-[11px] text-stone-300">
               <span className="font-mono font-bold text-[#D4AF37]">
@@ -1702,14 +1688,14 @@ export default function MonopolyBoard3D({
               </span>
               <button
                 onClick={() => onSelectTile(inspectedTile.index)}
-                className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-bold text-[11px] hover:bg-[#e5c247] shrink-0"
+                className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-bold text-[11px] hover:bg-[#e5c247] shrink-0 cursor-pointer"
               >
                 Deed Details
               </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

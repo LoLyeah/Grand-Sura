@@ -14,6 +14,7 @@ import {
   Globe,
   Layers,
   Mic,
+  Settings,
   TrendingDown,
   TrendingUp,
   Users,
@@ -63,7 +64,8 @@ type ActiveModalTab =
   | 'PORTFOLIO'
   | 'TRADE'
   | 'EVENTS'
-  | 'HOST';
+  | 'HOST'
+  | 'SETTINGS';
 
 const DEFAULT_HOST_CONFIG: HostConfig = {
   enabled: true,
@@ -157,6 +159,16 @@ export default function MonopolyApp() {
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
   const [diceRollTrigger, setDiceRollTrigger] = useState(0);
   const [sfxMuted, setSfxMuted] = useState(false);
+
+  // User Display & HUD Settings (Default OFF for 3D floating text labels & corner inspector card)
+  const [show3DLabelsOverlay, setShow3DLabelsOverlay] =
+    useState<boolean>(false);
+  const [show3DCornerInspector, setShow3DCornerInspector] =
+    useState<boolean>(false);
+  const [showAllPlayerTurnPopups, setShowAllPlayerTurnPopups] =
+    useState<boolean>(true);
+  const [botTurnDelayMs, setBotTurnDelayMs] = useState<number>(1650);
+
   const [hotkeyFeedback, setHotkeyFeedback] = useState<{
     text: string;
     tone: 'success' | 'warn';
@@ -394,12 +406,23 @@ export default function MonopolyApp() {
     const nextBotMove = computeNextBotAction(gameState);
     if (!nextBotMove) return;
 
+    const stepDelay =
+      gameState.turnNotice && showAllPlayerTurnPopups
+        ? botTurnDelayMs
+        : Math.min(850, botTurnDelayMs);
+
     const timer = setTimeout(() => {
       dispatchAction(nextBotMove);
-    }, 750);
+    }, stepDelay);
 
     return () => clearTimeout(timer);
-  }, [appPhase, gameState, dispatchAction]);
+  }, [
+    appPhase,
+    gameState,
+    dispatchAction,
+    botTurnDelayMs,
+    showAllPlayerTurnPopups,
+  ]);
 
   // Fetch Google Search Grounding Intel for a Landmark Tile
   const fetchLandmarkIntel = async (tileIdx: number) => {
@@ -766,26 +789,11 @@ export default function MonopolyApp() {
         cameraPreset={cameraPreset}
         onUserOrbitStart={() => setCameraPreset('FREE_ORBIT')}
         diceRollTrigger={diceRollTrigger}
+        show3DLabelsOverlay={show3DLabelsOverlay}
+        show3DCornerInspector={show3DCornerInspector}
       />
 
-      {/* 1B. Crisp 2D Top-Down Easy-Read Tabletop View (When viewMode === '2D') */}
-      {viewMode === '2D' && (
-        <MonopolyBoard2D
-          gameState={gameState}
-          selectedTileIndex={safeSelectedIndex}
-          onSelectTile={(idx, openModal) => {
-            setSelectedTileIndex(idx);
-            if (openModal) {
-              setActiveModal('DEED');
-            }
-            soundFX.playTokenHop();
-          }}
-          onDispatchAction={dispatchAction}
-          isMyTurn={isMyTurn}
-          remainingSeconds={remainingSeconds}
-          onSwitchTo3D={() => setViewMode('3D')}
-        />
-      )}
+      {/* 1B. Crisp 2D Top-Down Easy-Read Tabletop View (Rendered inside the 3-Column Game Arena below when viewMode === '2D') */}
 
       {/* 2. Top Bar Contract (Strictly 3 Zones separated by gap-8) */}
       <header className="relative z-20 flex items-center justify-between gap-8 px-6 py-3 bg-[#14100E]/95 border-b border-[#D4AF37]/25">
@@ -856,15 +864,15 @@ export default function MonopolyApp() {
           </button>
           <button
             onClick={() =>
-              setActiveModal(activeModal === 'HOST' ? 'NONE' : 'HOST')
+              setActiveModal(activeModal === 'SETTINGS' ? 'NONE' : 'SETTINGS')
             }
             className={`hover:text-[#D4AF37] transition-colors whitespace-nowrap shrink-0 ${
-              activeModal === 'HOST'
+              activeModal === 'SETTINGS'
                 ? 'text-[#D4AF37] underline underline-offset-4'
                 : ''
             }`}
           >
-            AI Host
+            Settings
           </button>
         </nav>
 
@@ -1493,63 +1501,479 @@ export default function MonopolyApp() {
         </div>
       )}
 
-      {/* 3. Dynamic Global Event Banner (Triggered automatically by the game engine every 4 turns) */}
-      {appPhase === 'IN_GAME' && gameState.lastTriggeredGlobalEvent && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-30 w-[92vw] max-w-2xl rounded-xl bg-[#18120F] border border-[#D4AF37]/50 shadow-2xl px-5 py-3.5 text-[#FAF6F0]">
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-xs text-[#D4AF37] font-semibold">
-                {gameState.lastTriggeredGlobalEvent.event.category ===
-                  'CRASH' ||
-                gameState.lastTriggeredGlobalEvent.event.category ===
-                  'AUDIT' ? (
-                  <TrendingDown className="w-4 h-4 text-red-400" />
-                ) : (
-                  <TrendingUp className="w-4 h-4 text-emerald-400" />
-                )}
-                <span>
-                  Automatic Periodic Market Event ·{' '}
-                  {gameState.lastTriggeredGlobalEvent.event.impactLabel}
+      {/* 3. Richup.io-Inspired 3-Column Non-Overlapping Game Arena (Left Activity & Camera Rail · Center Board · Right Players & Trade Rail) */}
+      {appPhase === 'IN_GAME' && (
+        <div className="fixed inset-0 top-[53px] z-10 flex pointer-events-none overflow-hidden">
+          {/* LEFT RAIL: View/Camera Switcher + Macro Event Status + Live Activity Feed */}
+          <aside
+            aria-label="Board Controls and Activity Log"
+            className={`hidden lg:flex flex-col justify-between w-72 xl:w-80 h-full p-3 gap-2.5 transition-transform duration-200 ${
+              dockCollapsed
+                ? '-translate-x-[calc(100%+16px)] pointer-events-none'
+                : 'translate-x-0 pointer-events-auto'
+            } ${
+              viewMode === '2D'
+                ? 'bg-[#120E0C] border-r border-[#D4AF37]/20'
+                : ''
+            }`}
+          >
+            {/* Card 1: View Mode, 3D Camera Angles & Audio Bar */}
+            <div className="rounded-xl bg-[#14100E]/95 border border-[#D4AF37]/30 p-3 shadow-xl space-y-2.5 text-[#FAF6F0]">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#D4AF37]">
+                  Board Camera & View
                 </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setShowLiveVoice((v) => !v)}
+                    className={`px-2 py-1 rounded-md text-[10px] font-semibold flex items-center gap-1 cursor-pointer ${
+                      showLiveVoice
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-[#0F0C0A] text-[#D4AF37] border border-[#D4AF37]/35 hover:bg-[#D4AF37]/15'
+                    }`}
+                    title="Real-time voice conversation with AI Host"
+                  >
+                    <Mic className="w-3 h-3" />
+                    <span>Voice</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const next = !sfxMuted;
+                      setSfxMuted(next);
+                      soundFX.muted = next;
+                      if (next && currentAudioRef.current) {
+                        currentAudioRef.current.pause();
+                      }
+                    }}
+                    className="p-1 rounded-md bg-[#0F0C0A] border border-white/10 text-stone-300 hover:text-white cursor-pointer"
+                    aria-label={sfxMuted ? 'Unmute Audio' : 'Mute Audio'}
+                  >
+                    {sfxMuted ? (
+                      <VolumeX className="w-3.5 h-3.5 text-red-400" />
+                    ) : (
+                      <Volume2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() =>
+                      setActiveModal(
+                        activeModal === 'SETTINGS' ? 'NONE' : 'SETTINGS'
+                      )
+                    }
+                    className="p-1 rounded-md bg-[#0F0C0A] border border-white/10 text-stone-300 hover:text-[#D4AF37] cursor-pointer"
+                    title="Board & Notification Settings"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-              <h2
-                className="text-lg font-bold text-[#FAF6F0]"
-                style={{ fontFamily: 'var(--font-fraunces), serif' }}
-              >
-                {gameState.lastTriggeredGlobalEvent.event.title}
-              </h2>
-              <p className="text-xs text-stone-300 leading-relaxed">
-                {gameState.lastTriggeredGlobalEvent.event.summary}
-              </p>
-              {gameState.lastTriggeredGlobalEvent.playerImpacts.some(
-                (i) => i.deltaCash !== 0
-              ) && (
-                <div
-                  className="pt-1 text-xs text-stone-300 tabular-nums"
-                  style={{ fontFamily: 'var(--font-mono), monospace' }}
+
+              <div className="grid grid-cols-4 gap-1">
+                {(
+                  [
+                    ['OVERVIEW', '3D Angle'],
+                    ['TOP_DOWN', 'Top-Down'],
+                    ['FOLLOW_TOKEN', 'Follow'],
+                  ] as [CameraPreset, string][]
+                ).map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    onClick={() => {
+                      setViewMode('3D');
+                      setCameraPreset(preset);
+                    }}
+                    className={`py-1.5 px-1.5 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                      viewMode === '3D' && cameraPreset === preset
+                        ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                        : 'bg-[#0F0C0A] text-stone-300 hover:text-white border border-white/10'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  onClick={() =>
+                    setViewMode((prev) => (prev === '2D' ? '3D' : '2D'))
+                  }
+                  className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
+                    viewMode === '2D'
+                      ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                      : 'bg-[#0F0C0A] text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-[#D4AF37]/15'
+                  }`}
                 >
-                  Treasury Adjustments:{' '}
-                  {gameState.lastTriggeredGlobalEvent.playerImpacts
-                    .map(
-                      (imp) =>
-                        `${imp.playerName}: ${
-                          imp.deltaCash >= 0 ? '+' : ''
-                        }$${imp.deltaCash}`
+                  2D View
+                </button>
+              </div>
+            </div>
+
+            {/* Card 2: Compact Macro Economic Event Status (Never covers board tiles!) */}
+            <div className="rounded-xl bg-[#14100E]/95 border border-[#D4AF37]/30 p-3 shadow-xl space-y-1.5 text-[#FAF6F0]">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#D4AF37] flex items-center gap-1.5">
+                  {gameState.activeGlobalEvent ? (
+                    gameState.activeGlobalEvent.event.category === 'CRASH' ||
+                    gameState.activeGlobalEvent.event.category === 'AUDIT' ? (
+                      <TrendingDown className="w-3.5 h-3.5 text-red-400" />
+                    ) : (
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
                     )
-                    .join(' · ')}
+                  ) : (
+                    <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  )}
+                  <span>Macro Market Status</span>
+                </span>
+                <button
+                  onClick={() => setActiveModal('EVENTS')}
+                  className="text-[11px] text-[#D4AF37] hover:underline cursor-pointer"
+                >
+                  Details →
+                </button>
+              </div>
+
+              {gameState.activeGlobalEvent ? (
+                <div className="p-2 rounded-lg bg-[#0F0C0A] border border-[#D4AF37]/35 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-white truncate">
+                      {gameState.activeGlobalEvent.event.title}
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-[#D4AF37] shrink-0">
+                      {gameState.activeGlobalEvent.remainingTurns}T left
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-emerald-300 font-medium">
+                    {gameState.activeGlobalEvent.event.impactLabel}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-stone-400 flex items-center justify-between">
+                  <span>Market Stable</span>
+                  <span className="font-mono text-[#D4AF37]">
+                    Next Event in {gameState.turnsUntilNextEvent}T
+                  </span>
                 </div>
               )}
             </div>
-            <button
-              onClick={() =>
-                dispatchAction({ type: 'DISMISS_GLOBAL_EVENT_BANNER' })
-              }
-              className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
-              aria-label="Dismiss Global Event Notification"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+            {/* Card 3: Richup.io Style Live Activity Log Feed */}
+            <div className="flex-1 min-h-0 rounded-xl bg-[#14100E]/95 border border-[#D4AF37]/30 p-3 shadow-xl flex flex-col text-[#FAF6F0]">
+              <div className="flex items-center justify-between pb-2 border-b border-white/10 shrink-0">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#D4AF37]">
+                  Activity Log
+                </span>
+                <button
+                  onClick={() => {
+                    setPortfolioTab('HISTORY');
+                    setActiveModal('PORTFOLIO');
+                  }}
+                  className="text-[11px] text-stone-400 hover:text-[#D4AF37] cursor-pointer"
+                >
+                  Full History ({gameState.logs.length}) →
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-1.5 py-2 pr-1 [scrollbar-width:thin] [scrollbar-color:#3a2e25_#0F0C0A]">
+                {gameState.logs.slice(0, 14).map((entry, idx) => {
+                  const matchedPlayer = gameState.players.find((p) =>
+                    entry.text.startsWith(p.name)
+                  );
+                  return (
+                    <div
+                      key={entry.id}
+                      className={`p-2 rounded-lg text-[11px] leading-snug border ${
+                        idx === 0
+                          ? 'bg-[#1D1611] border-[#D4AF37]/45 text-white font-medium'
+                          : 'bg-[#0F0C0A]/90 border-white/5 text-stone-300'
+                      }`}
+                    >
+                      <div className="flex items-start gap-1.5">
+                        {matchedPlayer && (
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0 mt-1"
+                            style={{ backgroundColor: matchedPlayer.color }}
+                          />
+                        )}
+                        <span className="break-words">{entry.text}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* AI Host One-Line Status at Bottom of Activity Feed */}
+              <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 text-[11px] text-stone-400 shrink-0">
+                <span className="truncate">
+                  <strong className="text-[#D4AF37]">Host:</strong>{' '}
+                  {hostTranscript}
+                </span>
+                <button
+                  onClick={() => setActiveModal('HOST')}
+                  className="text-[#D4AF37] hover:underline shrink-0 cursor-pointer"
+                >
+                  Config
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          {/* CENTER ARENA: 2D Tabletop Board OR Unobstructed 3D Viewport */}
+          <div className="flex-1 h-full relative flex flex-col items-center justify-center overflow-hidden">
+            {viewMode === '2D' && (
+              <div className="w-full h-full pointer-events-auto">
+                <MonopolyBoard2D
+                  gameState={gameState}
+                  selectedTileIndex={safeSelectedIndex}
+                  onSelectTile={(idx, openModal) => {
+                    setSelectedTileIndex(idx);
+                    if (openModal) {
+                      setActiveModal('DEED');
+                    }
+                    soundFX.playTokenHop();
+                  }}
+                  onDispatchAction={dispatchAction}
+                  isMyTurn={isMyTurn}
+                  remainingSeconds={remainingSeconds}
+                  onSwitchTo3D={() => setViewMode('3D')}
+                  onOpenTrade={() => setActiveModal('TRADE')}
+                />
+              </div>
+            )}
           </div>
+
+          {/* RIGHT RAIL: Richup.io Style Players Standings (with Owned Property Pips & 1-Click Trade) + Selected Property Card */}
+          <aside
+            aria-label="Players Standings and Property Inspector"
+            className={`hidden lg:flex flex-col justify-between w-76 xl:w-84 h-full p-3 gap-2.5 transition-transform duration-200 ${
+              dockCollapsed
+                ? 'translate-x-[calc(100%+16px)] pointer-events-none'
+                : 'translate-x-0 pointer-events-auto'
+            } ${
+              viewMode === '2D'
+                ? 'bg-[#120E0C] border-l border-[#D4AF37]/20'
+                : ''
+            }`}
+          >
+            {/* Card 1: Players Standings + Property Color Pips + 1-Click Trade */}
+            <div className="flex-1 min-h-0 rounded-xl bg-[#14100E]/95 border border-[#D4AF37]/30 p-3 shadow-xl flex flex-col text-[#FAF6F0]">
+              <div className="flex items-center justify-between pb-2 border-b border-white/10 shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#D4AF37]">
+                    Players ({gameState.players.filter((p) => !p.bankrupt).length}/
+                    {gameState.players.length})
+                  </span>
+                </div>
+                {gameState.mode === 'ONLINE' ? (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(gameState.roomCode);
+                      setCopiedCode(true);
+                      setTimeout(() => setCopiedCode(false), 2000);
+                    }}
+                    className="flex items-center gap-1 text-[11px] text-[#D4AF37] font-mono hover:underline cursor-pointer"
+                  >
+                    <span>#{gameState.roomCode}</span>
+                    {copiedCode ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setActiveModal('TRADE')}
+                    className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] text-[10px] font-extrabold hover:bg-[#e5c247] cursor-pointer"
+                  >
+                    + Trade Desk
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-2 py-2 pr-1 [scrollbar-width:thin] [scrollbar-color:#3a2e25_#0F0C0A]">
+                {gameState.players.map((p, idx) => {
+                  const isTurn = idx === gameState.turnIndex;
+                  const ownedProps = Object.values(gameState.properties).filter(
+                    (pr) => pr.ownerId === p.id
+                  );
+
+                  return (
+                    <div
+                      key={p.id}
+                      className={`p-2.5 rounded-xl border transition-all ${
+                        p.bankrupt
+                          ? 'bg-[#0F0C0A]/40 border-white/5 opacity-45'
+                          : isTurn
+                          ? 'bg-[#1E1712] border-[#D4AF37] shadow-md'
+                          : 'bg-[#0F0C0A]/90 border-white/10'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-extrabold text-[#0F0C0A] shrink-0"
+                            style={{ backgroundColor: p.color }}
+                          >
+                            {p.name.slice(0, 2).toUpperCase()}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-xs font-bold truncate ${
+                                  p.bankrupt
+                                    ? 'line-through text-stone-500'
+                                    : 'text-white'
+                                }`}
+                              >
+                                {p.name}
+                              </span>
+                              {p.isBot && (
+                                <span className="text-[9px] px-1 rounded bg-white/10 text-stone-300 font-semibold">
+                                  BOT
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="font-mono text-xs font-extrabold text-[#D4AF37] tabular-nums">
+                            ${p.cash}
+                          </span>
+                          {!p.bankrupt &&
+                            activeControllablePlayer &&
+                            p.id !== activeControllablePlayer.id && (
+                              <button
+                                onClick={() => {
+                                  setTradeTargetId(p.id);
+                                  setActiveModal('TRADE');
+                                }}
+                                className="px-2 py-0.5 rounded bg-stone-800 border border-[#D4AF37]/40 text-[10px] font-semibold text-[#D4AF37] hover:bg-[#D4AF37] hover:text-[#0F0C0A] transition-colors cursor-pointer"
+                                title={`Propose trade with ${p.name}`}
+                              >
+                                Trade
+                              </button>
+                            )}
+                        </div>
+                      </div>
+
+                      {/* Richup.io Style Owned Property Color Pips */}
+                      {ownedProps.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 mt-2 pt-1.5 border-t border-white/10">
+                          {ownedProps.map((pr) => {
+                            const t = activeTiles[pr.tileIndex];
+                            if (!t) return null;
+                            return (
+                              <button
+                                key={pr.tileIndex}
+                                onClick={() => {
+                                  setSelectedTileIndex(pr.tileIndex);
+                                  setActiveModal('DEED');
+                                }}
+                                className="h-3 px-1 rounded-xs flex items-center gap-0.5 border border-black/40 text-[8px] font-mono font-bold text-white shadow-xs hover:scale-110 transition-transform cursor-pointer"
+                                style={{ backgroundColor: t.colorHex }}
+                                title={`#${t.index} ${t.name} (${t.city})`}
+                              >
+                                {pr.houses > 0 && (
+                                  <span>
+                                    {pr.houses === 5 ? '★' : pr.houses}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Quick Portfolio & Trade History Buttons */}
+              <div className="pt-2 border-t border-white/10 grid grid-cols-2 gap-1.5 shrink-0">
+                <button
+                  onClick={() => {
+                    setPortfolioTab('HOLDINGS');
+                    setActiveModal('PORTFOLIO');
+                  }}
+                  className="py-1.5 px-2 rounded-lg bg-[#0F0C0A] border border-white/10 text-[11px] font-semibold text-stone-200 hover:border-[#D4AF37] cursor-pointer"
+                >
+                  Portfolio
+                </button>
+                <button
+                  onClick={() => {
+                    setPortfolioTab('TRADES');
+                    setActiveModal('PORTFOLIO');
+                  }}
+                  className="py-1.5 px-2 rounded-lg bg-[#0F0C0A] border border-white/10 text-[11px] font-semibold text-stone-200 hover:border-[#D4AF37] cursor-pointer"
+                >
+                  Trades ({(gameState.tradeHistory || []).length})
+                </button>
+              </div>
+            </div>
+
+            {/* Card 2: Selected Space Quick Inspector */}
+            <div className="rounded-xl bg-[#14100E]/95 border border-[#D4AF37]/30 p-3 shadow-xl space-y-2 text-[#FAF6F0] shrink-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono text-stone-400">
+                    Space #{selectedTile.index} · {selectedTile.city}
+                  </div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5 truncate mt-0.5">
+                    <span
+                      className="w-2.5 h-2.5 rounded-xs shrink-0 border border-white/25"
+                      style={{ backgroundColor: selectedTile.colorHex }}
+                    />
+                    <span className="truncate">{selectedTile.name}</span>
+                  </div>
+                </div>
+                {selectedTile.price && (
+                  <span className="font-mono text-xs font-extrabold text-[#D4AF37] shrink-0">
+                    ${selectedEffectivePrice}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 text-[11px] text-stone-300">
+                <span className="truncate">
+                  Owner:{' '}
+                  <strong className="text-white">
+                    {selectedOwner
+                      ? selectedOwner.name.split(' ')[0]
+                      : selectedTile.price
+                      ? 'Unowned'
+                      : 'Sovereign'}
+                  </strong>
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {activeControllablePlayer &&
+                    !activeControllablePlayer.isBot &&
+                    canBuildHouseOnTile(
+                      gameState,
+                      activeControllablePlayer.id,
+                      selectedTile.index
+                    ).allowed && (
+                      <button
+                        onClick={() =>
+                          dispatchAction({
+                            type: 'BUILD_HOUSE',
+                            playerId: activeControllablePlayer.id,
+                            tileIndex: selectedTile.index,
+                          })
+                        }
+                        className="px-2 py-1 rounded bg-emerald-600 text-white text-[10px] font-bold hover:bg-emerald-500 cursor-pointer"
+                      >
+                        Build (${selectedEffectiveHouseCost})
+                      </button>
+                    )}
+                  <button
+                    onClick={() => setActiveModal('DEED')}
+                    className="px-2 py-1 rounded bg-[#0F0C0A] border border-[#D4AF37]/40 text-[#D4AF37] hover:bg-[#D4AF37] hover:text-[#0F0C0A] text-[10px] font-semibold transition-colors cursor-pointer"
+                  >
+                    Deed & Intel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </aside>
         </div>
       )}
 
@@ -1562,13 +1986,14 @@ export default function MonopolyApp() {
           const noticePlayer = gameState.players.find(
             (p) => p.id === notice.playerId
           );
-          const isHumanNotice =
+          const shouldShowNotice =
+            showAllPlayerTurnPopups ||
             !noticePlayer?.isBot ||
             notice.kind === 'BANKRUPTCY' ||
             (notice.kind === 'RENT_PAID' &&
               notice.creditorId === localPlayerId);
 
-          if (!isHumanNotice) return null;
+          if (!shouldShowNotice) return null;
 
           const noticeTile = activeTiles[notice.tileIndex] || activeTiles[0];
           const noticeEffectivePrice = getEffectivePropertyPrice(
@@ -1577,7 +2002,13 @@ export default function MonopolyApp() {
           );
 
           return (
-            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4">
+            <div
+              className={`fixed inset-0 z-40 flex items-center justify-center p-4 ${
+                isMyTurn
+                  ? 'bg-black/65 pointer-events-auto'
+                  : 'bg-black/35 pointer-events-none'
+              }`}
+            >
               <motion.div
                 key={`notice-${notice.id}`}
                 initial={{
@@ -1588,7 +2019,7 @@ export default function MonopolyApp() {
                 }}
                 animate={{ opacity: 1, scale: 1, y: 0, rotateZ: 0 }}
                 transition={{ type: 'spring', stiffness: 360, damping: 26 }}
-                className="w-full max-w-md rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-5 text-[#FAF6F0] space-y-4"
+                className="w-full max-w-md rounded-2xl bg-[#14100E] border-2 border-[#D4AF37] shadow-2xl p-5 text-[#FAF6F0] space-y-4 pointer-events-auto"
               >
                 {/* Top Dice & Passed GO Status Header */}
                 <div className="flex items-center justify-between border-b border-white/10 pb-3">
@@ -1596,6 +2027,8 @@ export default function MonopolyApp() {
                     <span className="px-2 py-0.5 rounded bg-[#D4AF37]/20 text-[#D4AF37] font-bold uppercase">
                       {notice.kind === 'BUY_DECISION'
                         ? 'Available Title Deed'
+                        : notice.kind === 'PROPERTY_BOUGHT'
+                        ? 'Title Deed Purchased'
                         : notice.kind === 'RENT_PAID'
                         ? 'Rent Payment Notice'
                         : notice.kind === 'TAX_PAID'
@@ -1614,7 +2047,11 @@ export default function MonopolyApp() {
                       <motion.span
                         initial={{ scale: 0.6, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}
-                        transition={{ type: 'spring', stiffness: 420, damping: 18 }}
+                        transition={{
+                          type: 'spring',
+                          stiffness: 420,
+                          damping: 18,
+                        }}
                         className="px-2 py-0.5 rounded bg-emerald-900/90 text-emerald-300 font-mono font-bold"
                       >
                         +$200 Passed GO!
@@ -1689,15 +2126,15 @@ export default function MonopolyApp() {
 
                     <div className="flex items-center justify-between text-xs pt-1 border-t border-stone-300">
                       <span className="text-stone-600">
-                        Your Current Treasury:
+                        {noticePlayer?.name || 'Contender'}’s Treasury:
                       </span>
                       <span className="font-mono font-bold text-emerald-700">
-                        ${currentPlayer?.cash || 0}
+                        ${noticePlayer?.cash ?? currentPlayer?.cash ?? 0}
                       </span>
                     </div>
                   </motion.div>
                 ) : (
-                  /* Standard Event / Rent / Tax / Card / Bankruptcy Card */
+                  /* Standard Event / Rent / Tax / Card / Bankruptcy / Property Bought Card */
                   <motion.div
                     initial={{ y: 10, opacity: 0 }}
                     animate={{ y: 0, opacity: 1 }}
@@ -1800,6 +2237,23 @@ export default function MonopolyApp() {
                       className="py-2.5 px-3 rounded-xl bg-stone-800 text-stone-200 font-semibold text-xs hover:bg-stone-700 transition-colors cursor-pointer"
                     >
                       Manage Estates First
+                    </button>
+                  </div>
+                ) : !isMyTurn ? (
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/10 text-xs">
+                    <span className="text-stone-400">
+                      <strong className="text-[#D4AF37]">
+                        {noticePlayer?.name || 'Contender'}
+                      </strong>{' '}
+                      is in play (auto-advancing...)
+                    </span>
+                    <button
+                      onClick={() =>
+                        dispatchAction({ type: 'DISMISS_TURN_NOTICE' })
+                      }
+                      className="py-1.5 px-3 rounded-lg bg-stone-800 text-stone-200 font-semibold text-xs hover:bg-stone-700 transition-colors cursor-pointer shrink-0"
+                    >
+                      Dismiss
                     </button>
                   </div>
                 ) : (
@@ -2074,50 +2528,150 @@ export default function MonopolyApp() {
                     </div>
                   </div>
 
-                  {/* Net Asset Impact Summary for Both Parties */}
-                  <div className="p-3 rounded-lg bg-[#0F0C0A] border border-[#D4AF37]/30 space-y-2 text-xs">
-                    <div className="text-[11px] font-bold uppercase tracking-wider text-[#D4AF37]">
-                      Net Change in Total Assets (Cash + Property Values)
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 font-mono">
-                      <div className="flex items-center justify-between p-2 rounded bg-[#14100E] border border-white/10">
-                        <span className="text-stone-300 truncate">{fromP?.name}:</span>
-                        <span
-                          className={`font-bold ${
-                            fromNetDelta > 0
-                              ? 'text-emerald-400'
-                              : fromNetDelta < 0
-                              ? 'text-red-400'
-                              : 'text-[#D4AF37]'
-                          }`}
-                        >
-                          {fromNetDelta > 0
-                            ? `+$${fromNetDelta}`
-                            : fromNetDelta < 0
-                            ? `-$${Math.abs(fromNetDelta)}`
-                            : '$0'}
-                        </span>
+                  {/* Net Asset Impact Summary & Initiator vs Receiver Balance Bar */}
+                  {(() => {
+                    const fromCurrPropVal = Object.values(gameState.properties)
+                      .filter((pr) => pr.ownerId === fromP?.id)
+                      .reduce((sum, pr) => {
+                        const base = activeTiles[pr.tileIndex]?.price || 0;
+                        const deedVal = pr.mortgaged
+                          ? Math.floor(base * 0.5)
+                          : base;
+                        const buildVal =
+                          (pr.houses || 0) *
+                          (activeTiles[pr.tileIndex]?.houseCost || 0);
+                        return sum + deedVal + buildVal;
+                      }, 0);
+                    const toCurrPropVal = Object.values(gameState.properties)
+                      .filter((pr) => pr.ownerId === toP?.id)
+                      .reduce((sum, pr) => {
+                        const base = activeTiles[pr.tileIndex]?.price || 0;
+                        const deedVal = pr.mortgaged
+                          ? Math.floor(base * 0.5)
+                          : base;
+                        const buildVal =
+                          (pr.houses || 0) *
+                          (activeTiles[pr.tileIndex]?.houseCost || 0);
+                        return sum + deedVal + buildVal;
+                      }, 0);
+                    const fromPreTotal = (fromP?.cash || 0) + fromCurrPropVal;
+                    const toPreTotal = (toP?.cash || 0) + toCurrPropVal;
+                    const fromPostTotal = fromPreTotal + fromNetDelta;
+                    const toPostTotal = toPreTotal + toNetDelta;
+                    const combinedPost = Math.max(
+                      1,
+                      fromPostTotal + toPostTotal
+                    );
+                    const combinedPre = Math.max(1, fromPreTotal + toPreTotal);
+                    const fromPrePct = Math.round(
+                      (fromPreTotal / combinedPre) * 100
+                    );
+                    const fromPostPct = Math.max(
+                      8,
+                      Math.min(
+                        92,
+                        Math.round((fromPostTotal / combinedPost) * 100)
+                      )
+                    );
+                    const toPostPct = 100 - fromPostPct;
+
+                    return (
+                      <div className="p-3.5 rounded-lg bg-[#0F0C0A] border border-[#D4AF37]/30 space-y-2.5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-[#D4AF37]">
+                            Initiator vs. Receiver Total Asset Balance
+                          </span>
+                          <span className="text-[11px] font-mono text-stone-400 tabular-nums">
+                            Pre-trade split: {fromPrePct}% / {100 - fromPrePct}%
+                          </span>
+                        </div>
+
+                        {/* Visual Progress Bar comparing Initiator vs Receiver Post-Trade Total Assets */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-mono tabular-nums">
+                            <span className="flex items-center gap-1.5">
+                              <span className="text-stone-200 font-semibold">
+                                Initiator ({fromP?.name}): ${fromPostTotal} (
+                                {fromPostPct}%)
+                              </span>
+                              <span
+                                className={`font-bold ${
+                                  fromNetDelta > 0
+                                    ? 'text-emerald-400'
+                                    : fromNetDelta < 0
+                                    ? 'text-red-400'
+                                    : 'text-[#D4AF37]'
+                                }`}
+                              >
+                                {fromNetDelta > 0
+                                  ? `+$${fromNetDelta}`
+                                  : fromNetDelta < 0
+                                  ? `-$${Math.abs(fromNetDelta)}`
+                                  : '$0'}
+                              </span>
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                              <span
+                                className={`font-bold ${
+                                  toNetDelta > 0
+                                    ? 'text-emerald-400'
+                                    : toNetDelta < 0
+                                    ? 'text-red-400'
+                                    : 'text-[#D4AF37]'
+                                }`}
+                              >
+                                {toNetDelta > 0
+                                  ? `+$${toNetDelta}`
+                                  : toNetDelta < 0
+                                  ? `-$${Math.abs(toNetDelta)}`
+                                  : '$0'}
+                              </span>
+                              <span className="text-stone-200 font-semibold">
+                                Receiver ({toP?.name}): ${toPostTotal} (
+                                {toPostPct}%)
+                              </span>
+                            </span>
+                          </div>
+
+                          <div
+                            role="progressbar"
+                            aria-valuenow={fromPostPct}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label="Initiator versus Receiver total asset balance comparison"
+                            className="relative w-full h-3 rounded-md bg-[#14100E] border border-white/15 overflow-hidden flex"
+                          >
+                            <div
+                              className={`h-full transition-all duration-200 ${
+                                fromNetDelta > 0
+                                  ? 'bg-emerald-500'
+                                  : fromNetDelta < 0
+                                  ? 'bg-red-500'
+                                  : 'bg-[#D4AF37]'
+                              }`}
+                              style={{ width: `${fromPostPct}%` }}
+                            />
+                            <div
+                              className={`h-full transition-all duration-200 border-l border-[#0F0C0A] ${
+                                toNetDelta > 0
+                                  ? 'bg-emerald-500'
+                                  : toNetDelta < 0
+                                  ? 'bg-red-500'
+                                  : 'bg-stone-600'
+                              }`}
+                              style={{ width: `${toPostPct}%` }}
+                            />
+                            {/* Pre-Trade Baseline Marker */}
+                            <div
+                              className="absolute top-0 bottom-0 w-0.5 bg-white/90 pointer-events-none"
+                              style={{ left: `${fromPrePct}%` }}
+                              title={`Pre-trade balance marker: ${fromPrePct}% / ${100 - fromPrePct}%`}
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex items-center justify-between p-2 rounded bg-[#14100E] border border-white/10">
-                        <span className="text-stone-300 truncate">{toP?.name}:</span>
-                        <span
-                          className={`font-bold ${
-                            toNetDelta > 0
-                              ? 'text-emerald-400'
-                              : toNetDelta < 0
-                              ? 'text-red-400'
-                              : 'text-[#D4AF37]'
-                          }`}
-                        >
-                          {toNetDelta > 0
-                            ? `+$${toNetDelta}`
-                            : toNetDelta < 0
-                            ? `-$${Math.abs(toNetDelta)}`
-                            : '$0'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   <div className="flex items-center gap-3 pt-2">
                     <button
@@ -2144,10 +2698,16 @@ export default function MonopolyApp() {
         </div>
       )}
 
-      {/* 7. Secondary Modal Drawers (Deed Inspector + Google Search, Macro Events, Portfolio, Trade, AI Host, Lobby) */}
+      {/* 7. Secondary Modal Drawers (Deed Inspector + Google Search, Macro Events, Portfolio, Trade, AI Host, Lobby, Settings) */}
       {activeModal !== 'NONE' && (
-        <div className="fixed inset-x-0 top-14 bottom-28 z-30 flex items-center justify-center p-4 pointer-events-none">
-          <div className="w-full max-w-3xl max-h-full overflow-y-auto rounded-xl bg-[#14100E] border border-[#D4AF37]/35 shadow-2xl p-6 text-[#FAF6F0] pointer-events-auto">
+        <div
+          onClick={() => setActiveModal('NONE')}
+          className="fixed inset-0 top-[53px] z-50 bg-black/75 flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-3xl max-h-[85vh] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#D4AF37_#14100E] rounded-2xl bg-[#14100E] border border-[#D4AF37]/45 shadow-2xl p-6 text-[#FAF6F0]"
+          >
             {/* DEED INSPECTOR & GOOGLE SEARCH LANDMARK INTEL */}
             {activeModal === 'DEED' && (
               <div className="space-y-5">
@@ -2862,8 +3422,8 @@ export default function MonopolyApp() {
                           </span>
                         </div>
 
-                        {/* Scrollable List of the Last 20 Actions */}
-                        <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+                        {/* List of the Last 20 Actions (Scrolled cleanly by the parent modal container) */}
+                        <div className="space-y-2">
                           {filteredLogs.length === 0 ? (
                             <div className="p-6 rounded-xl bg-[#0F0C0A] border border-white/10 text-center text-xs text-stone-400 italic">
                               No matching actions recorded in the last 20 turns
@@ -3062,8 +3622,8 @@ export default function MonopolyApp() {
                           </button>
                         </div>
 
-                        {/* Completed Bilateral Trades List */}
-                        <div className="space-y-2.5 max-h-[52vh] overflow-y-auto pr-1">
+                        {/* Completed Bilateral Trades List (Scrolled cleanly by the parent modal container) */}
+                        <div className="space-y-2.5">
                           {filteredTrades.length === 0 ? (
                             <div className="p-6 rounded-xl bg-[#0F0C0A] border border-white/10 text-center space-y-2">
                               <p className="text-xs text-stone-400">
@@ -3710,6 +4270,157 @@ export default function MonopolyApp() {
                             </div>
                           )}
                         </div>
+
+                        {/* INITIATOR VS RECEIVER TOTAL ASSET BALANCE PROGRESS BAR */}
+                        {(() => {
+                          const combinedPreAssets = Math.max(
+                            1,
+                            initiatorCurrTotalAssets + partnerCurrTotalAssets
+                          );
+                          const combinedPostAssets = Math.max(
+                            1,
+                            initiatorPostTotalAssets + partnerPostTotalAssets
+                          );
+                          const initiatorPreSharePct = Math.round(
+                            (initiatorCurrTotalAssets / combinedPreAssets) * 100
+                          );
+                          const initiatorPostSharePct = Math.max(
+                            6,
+                            Math.min(
+                              94,
+                              Math.round(
+                                (initiatorPostTotalAssets /
+                                  combinedPostAssets) *
+                                  100
+                              )
+                            )
+                          );
+                          const receiverPostSharePct =
+                            100 - initiatorPostSharePct;
+                          const shareDeltaPct =
+                            initiatorPostSharePct - initiatorPreSharePct;
+
+                          return (
+                            <div className="p-3 rounded-lg bg-[#14100E] border border-white/10 space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                                <div className="flex items-center gap-2 font-mono tabular-nums">
+                                  <span className="font-semibold text-white">
+                                    Initiator ({initiator?.name}): $
+                                    {initiatorPostTotalAssets} (
+                                    {initiatorPostSharePct}%)
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded font-bold ${
+                                      initiatorNetDelta > 0
+                                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                                        : initiatorNetDelta < 0
+                                        ? 'bg-red-950 text-red-300 border border-red-500/40'
+                                        : 'bg-stone-800 text-[#D4AF37] border border-[#D4AF37]/30'
+                                    }`}
+                                  >
+                                    {initiatorNetDelta > 0
+                                      ? `+$${initiatorNetDelta} (${
+                                          shareDeltaPct >= 0
+                                            ? `+${shareDeltaPct}%`
+                                            : `${shareDeltaPct}%`
+                                        })`
+                                      : initiatorNetDelta < 0
+                                      ? `-$${Math.abs(initiatorNetDelta)} (${shareDeltaPct}%)`
+                                      : '$0 (0%)'}
+                                  </span>
+                                </div>
+
+                                <span className="text-stone-400 font-medium">
+                                  Initiator vs. Receiver Asset Balance
+                                </span>
+
+                                <div className="flex items-center gap-2 font-mono tabular-nums">
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded font-bold ${
+                                      partnerNetDelta > 0
+                                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                                        : partnerNetDelta < 0
+                                        ? 'bg-red-950 text-red-300 border border-red-500/40'
+                                        : 'bg-stone-800 text-[#D4AF37] border border-[#D4AF37]/30'
+                                    }`}
+                                  >
+                                    {partnerNetDelta > 0
+                                      ? `+$${partnerNetDelta} (${
+                                          -shareDeltaPct >= 0
+                                            ? `+${-shareDeltaPct}%`
+                                            : `${-shareDeltaPct}%`
+                                        })`
+                                      : partnerNetDelta < 0
+                                      ? `-$${Math.abs(partnerNetDelta)} (${-shareDeltaPct}%)`
+                                      : '$0 (0%)'}
+                                  </span>
+                                  <span className="font-semibold text-white">
+                                    Receiver ({partner?.name || 'Counterparty'}
+                                    ): ${partnerPostTotalAssets} (
+                                    {receiverPostSharePct}%)
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Dual-Segment Progress Bar with Pre-Trade Baseline Marker */}
+                              <div
+                                role="progressbar"
+                                aria-valuenow={initiatorPostSharePct}
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-label="Initiator versus Receiver total asset balance progress bar"
+                                className="relative w-full h-3.5 rounded-md bg-[#0F0C0A] border border-white/15 overflow-hidden flex"
+                              >
+                                {/* Initiator Segment (Highlighted Green on Gain, Red on Loss, Gold on Parity) */}
+                                <div
+                                  className={`h-full transition-all duration-200 ${
+                                    initiatorNetDelta > 0
+                                      ? 'bg-emerald-500'
+                                      : initiatorNetDelta < 0
+                                      ? 'bg-red-500'
+                                      : 'bg-[#D4AF37]'
+                                  }`}
+                                  style={{ width: `${initiatorPostSharePct}%` }}
+                                />
+                                {/* Receiver Segment (Highlighted Green on Gain, Red on Loss, Stone on Parity) */}
+                                <div
+                                  className={`h-full transition-all duration-200 border-l border-[#0F0C0A] ${
+                                    partnerNetDelta > 0
+                                      ? 'bg-emerald-500'
+                                      : partnerNetDelta < 0
+                                      ? 'bg-red-500'
+                                      : 'bg-stone-600'
+                                  }`}
+                                  style={{ width: `${receiverPostSharePct}%` }}
+                                />
+                                {/* Pre-Trade Baseline Split Marker */}
+                                <div
+                                  className="absolute top-0 bottom-0 w-0.5 bg-white shadow-sm pointer-events-none"
+                                  style={{ left: `${initiatorPreSharePct}%` }}
+                                  title={`Pre-Trade Asset Split: ${initiatorPreSharePct}% Initiator / ${
+                                    100 - initiatorPreSharePct
+                                  }% Receiver`}
+                                />
+                              </div>
+
+                              <div className="flex items-center justify-between text-[10px] font-mono text-stone-400 tabular-nums">
+                                <span>
+                                  Pre-Trade Split: {initiatorPreSharePct}% ($
+                                  {initiatorCurrTotalAssets}) vs{' '}
+                                  {100 - initiatorPreSharePct}% ($
+                                  {partnerCurrTotalAssets})
+                                </span>
+                                <span>
+                                  {initiatorNetDelta > 0
+                                    ? `Initiator gains +$${initiatorNetDelta} net assets`
+                                    : initiatorNetDelta < 0
+                                    ? `Receiver gains +$${partnerNetDelta} net assets`
+                                    : 'Zero net asset transfer ($0 delta)'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                           {/* Initiator Asset Impact Card */}
@@ -4562,6 +5273,230 @@ export default function MonopolyApp() {
                 )}
               </div>
             )}
+
+            {/* USER DISPLAY, 3D HUD & TURN NOTIFICATION SETTINGS MODAL */}
+            {activeModal === 'SETTINGS' && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <div className="text-xs text-[#D4AF37] font-medium flex items-center gap-1.5">
+                      <Settings className="w-4 h-4" />
+                      <span>User Preferences & 3D Board Display Settings</span>
+                    </div>
+                    <h2
+                      className="text-2xl font-bold mt-0.5"
+                      style={{ fontFamily: 'var(--font-fraunces), serif' }}
+                    >
+                      Board & Notification Settings
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => setActiveModal('NONE')}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* 1. 3D Viewport Overlays (Default OFF since 3D canvas text is readable) */}
+                <div className="space-y-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
+                    1. 3D Board Viewport Overlays
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {/* 3D Crisp Text Labels Overlay Toggle (Default OFF) */}
+                    <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="text-xs font-bold text-white">
+                          3D Crisp Text Labels Overlay
+                        </div>
+                        <p className="text-[11px] text-stone-400 leading-relaxed">
+                          Floating HTML text tags above 3D board tiles. Default
+                          is OFF because high-resolution 3D board textures are
+                          directly readable.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setShow3DLabelsOverlay((v) => !v)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                          show3DLabelsOverlay
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'bg-stone-800 text-stone-300 border border-white/10 hover:text-white'
+                        }`}
+                      >
+                        {show3DLabelsOverlay ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+
+                    {/* 3D Top-Left Tile Inspector Card Toggle (Default OFF) */}
+                    <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="text-xs font-bold text-white">
+                          Top-Left 3D Tile Summary Card
+                        </div>
+                        <p className="text-[11px] text-stone-400 leading-relaxed">
+                          Floating corner mini-card showing hovered/selected
+                          space details. Default is OFF to keep the 3D viewport
+                          unobstructed.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setShow3DCornerInspector((v) => !v)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                          show3DCornerInspector
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'bg-stone-800 text-stone-300 border border-white/10 hover:text-white'
+                        }`}
+                      >
+                        {show3DCornerInspector ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Turn Resolution Pop-ups & AI Bot Pacing */}
+                <div className="space-y-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
+                    2. Turn Resolution Pop-ups & Bot Pacing
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-xs font-bold text-white">
+                        Show Turn Pop-ups When Other Players / Bots Are in Play
+                      </div>
+                      <p className="text-[11px] text-stone-400 leading-relaxed">
+                        Keep the Turn Resolution pop-up visible during AI Bot
+                        and other players’ turns (purchases, rent, tax, cards,
+                        and detention) so you never miss table activity.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowAllPlayerTurnPopups((v) => !v)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                        showAllPlayerTurnPopups
+                          ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                          : 'bg-stone-800 text-stone-300 border border-white/10 hover:text-white'
+                      }`}
+                    >
+                      {showAllPlayerTurnPopups ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-white">
+                          AI Bot Turn Pacing Speed
+                        </div>
+                        <p className="text-[11px] text-stone-400">
+                          Controls how long AI Bot turn notifications stay on
+                          screen before advancing to the next contender.
+                        </p>
+                      </div>
+                      <span className="text-xs font-mono text-[#D4AF37]">
+                        {(botTurnDelayMs / 1000).toFixed(2)}s / step
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          [950, 'Fast (0.95s)'],
+                          [1650, 'Standard (1.65s)'],
+                          [2500, 'Relaxed (2.50s)'],
+                        ] as [number, string][]
+                      ).map(([ms, label]) => (
+                        <button
+                          key={ms}
+                          onClick={() => setBotTurnDelayMs(ms)}
+                          className={`py-2 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                            botTurnDelayMs === ms
+                              ? 'bg-[#D4AF37] text-[#0F0C0A] font-bold'
+                              : 'bg-[#14100E] text-stone-300 border border-white/10 hover:text-white'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Audio, Turn Timer & AI Host Quick Access */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2.5">
+                    <div className="text-xs font-bold text-white">
+                      Turn Countdown Timer
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {(
+                        [
+                          [30, '30s'],
+                          [60, '60s'],
+                          [90, '90s'],
+                          [0, 'Off'],
+                        ] as [number, string][]
+                      ).map(([sec, label]) => (
+                        <button
+                          key={sec}
+                          onClick={() => {
+                            setDraftTurnLimit(sec);
+                            dispatchAction({
+                              type: 'SET_TURN_TIME_LIMIT',
+                              seconds: sec,
+                            });
+                          }}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-semibold cursor-pointer ${
+                            gameState.turnTimeLimitSeconds === sec
+                              ? 'bg-[#D4AF37] text-[#0F0C0A] font-bold'
+                              : 'bg-[#14100E] text-stone-300 border border-white/10 hover:text-white'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-bold text-white">
+                        Sound Effects & Audio
+                      </div>
+                      <p className="text-[11px] text-stone-400">
+                        Synthesized Web Audio dice, chimes, and AI Host voice.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          const next = !sfxMuted;
+                          setSfxMuted(next);
+                          soundFX.muted = next;
+                          if (next && currentAudioRef.current) {
+                            currentAudioRef.current.pause();
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                          !sfxMuted
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'bg-red-950 text-red-300 border border-red-500/40'
+                        }`}
+                      >
+                        {sfxMuted ? 'Muted' : 'Audio ON'}
+                      </button>
+                      <button
+                        onClick={() => setActiveModal('HOST')}
+                        className="px-3 py-1.5 rounded-lg bg-[#14100E] border border-[#D4AF37]/40 text-xs font-semibold text-[#D4AF37] hover:bg-[#D4AF37]/15 cursor-pointer"
+                      >
+                        AI Host →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -4575,215 +5510,78 @@ export default function MonopolyApp() {
         />
       )}
 
-      {/* 9. Unified Collapsible Bottom Control Dock (Zero Viewport Occlusion, <= 15% height) */}
-      <section
-        aria-label="Game Control Dock"
-        className={`fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[96vw] max-w-[1040px] transition-transform duration-200 ${
-          dockCollapsed ? 'translate-y-[calc(100%-28px)]' : 'translate-y-0'
-        }`}
-      >
-        {/* Collapse / Expand Zen Mode Toggle Tab */}
-        <div className="flex justify-center">
-          <button
-            onClick={() => setDockCollapsed((c) => !c)}
-            className="px-4 py-1 rounded-t-lg bg-[#14100E] border-t border-x border-[#D4AF37]/30 text-[11px] font-medium text-stone-300 hover:text-[#D4AF37] flex items-center gap-1.5"
-          >
-            {dockCollapsed ? (
-              <>
-                <ChevronUp className="w-3.5 h-3.5" /> Show Controls (H)
-              </>
-            ) : (
-              <>
-                <ChevronDown className="w-3.5 h-3.5" /> Hide Controls (H)
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Main Dock Body (Solid dark surface — zero backdrop-filter over WebGL) */}
-        <div className="rounded-xl bg-[#14100E] border border-[#D4AF37]/35 shadow-2xl px-4 py-2.5 text-[#FAF6F0] space-y-2">
-          {/* Row 1: Player Standings Strip + Board Size Badge + Active Macro Event Metadata */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-white/10 text-xs">
-            <div className="flex flex-wrap items-center gap-2.5">
-              {gameState.mode === 'ONLINE' && (
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(gameState.roomCode);
-                    setCopiedCode(true);
-                    setTimeout(() => setCopiedCode(false), 2000);
-                  }}
-                  className="flex items-center gap-1 text-[#D4AF37] font-mono hover:underline"
-                  title="Copy 6-character Room Code"
-                >
-                  <span>Room #{gameState.roomCode}</span>
-                  {copiedCode ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                  <span aria-hidden="true">·</span>
-                </button>
-              )}
-
-              {gameState.players.map((p, idx) => {
-                const isTurn = idx === gameState.turnIndex;
-                return (
-                  <div
-                    key={p.id}
-                    className={`flex items-center gap-1.5 tabular-nums ${
-                      p.bankrupt
-                        ? 'opacity-40 line-through'
-                        : isTurn
-                        ? 'text-white font-bold'
-                        : 'text-stone-400'
-                    }`}
-                  >
-                    <span
-                      className="w-2.5 h-2.5 rounded-xs shrink-0"
-                      style={{ backgroundColor: p.color }}
-                    />
-                    <span className="truncate max-w-[100px]">{p.name}</span>
-                    <span
-                      className="text-[#D4AF37]"
-                      style={{ fontFamily: 'var(--font-mono), monospace' }}
-                    >
-                      ${p.cash}
-                    </span>
-                    {idx < gameState.players.length - 1 && (
-                      <span aria-hidden="true" className="text-stone-600 pl-0.5">
-                        ·
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-2 text-[11px] text-stone-400 tabular-nums">
-              <button
-                onClick={() => setActiveModal('LOBBY')}
-                className="px-2 py-0.5 rounded bg-[#0F0C0A] border border-white/10 text-stone-300 hover:border-[#D4AF37] hover:text-[#D4AF37]"
-                title={`${activeBoardConfig.name} (${activeBoardConfig.recommendedPlayers})`}
-              >
-                {activeBoardConfig.shortLabel} (
-                {activeBoardConfig.recommendedMinPlayers}–
-                {activeBoardConfig.recommendedMaxPlayers}P)
-              </button>
-              <span>·</span>
-              {gameState.activeGlobalEvent ? (
-                <button
-                  onClick={() => setActiveModal('EVENTS')}
-                  className="text-[#D4AF37] hover:underline font-medium"
-                >
-                  Event: {gameState.activeGlobalEvent.event.title} (
-                  {gameState.activeGlobalEvent.remainingTurns}T)
-                </button>
+      {/* 9. Sleek Single-Row Center-Bottom Turn Action Bar (Only shown in 3D mode or on mobile when no modal is open) */}
+      {appPhase === 'IN_GAME' && activeModal === 'NONE' && (
+        <section
+          aria-label="Turn Action Bar"
+          className={`fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[94vw] max-w-xl transition-transform duration-200 ${
+            viewMode === '2D' ? 'lg:hidden' : ''
+          } ${
+            dockCollapsed ? 'translate-y-[calc(100%-26px)]' : 'translate-y-0'
+          }`}
+        >
+          {/* Toggle Sidebars / Zen Mode Tab */}
+          <div className="flex justify-center">
+            <button
+              onClick={() => setDockCollapsed((c) => !c)}
+              className="px-3 py-0.5 rounded-t-lg bg-[#14100E] border-t border-x border-[#D4AF37]/30 text-[10px] font-medium text-stone-300 hover:text-[#D4AF37] flex items-center gap-1 cursor-pointer"
+            >
+              {dockCollapsed ? (
+                <>
+                  <ChevronUp className="w-3 h-3" /> Show HUD (H)
+                </>
               ) : (
-                <button
-                  onClick={() => setActiveModal('EVENTS')}
-                  className="hover:text-[#D4AF37]"
-                >
-                  Next Event: {gameState.turnsUntilNextEvent}T
-                </button>
+                <>
+                  <ChevronDown className="w-3 h-3" /> Zen Mode (H)
+                </>
               )}
-            </div>
+            </button>
           </div>
 
-          {/* Row 2: Primary Turn Action Controls + Visual Turn Timer + 2D/3D/Top-Down View Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
-            {/* Left: Dice + Visual Turn Countdown Timer + Primary Turn Actions */}
-            <div className="flex flex-wrap items-center gap-2">
-              <div
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs tabular-nums"
-                style={{ fontFamily: 'var(--font-mono), monospace' }}
-              >
-                <Dices className="w-4 h-4 text-[#D4AF37]" />
+          {/* Single-Row Richup.io Style Floating Turn Command Pill */}
+          <div className="rounded-2xl bg-[#14100E] border border-[#D4AF37]/45 shadow-2xl px-4 py-2.5 text-[#FAF6F0] flex flex-wrap items-center justify-between gap-3">
+            {/* Left: Active Player + Dice + Timer */}
+            <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="w-3 h-3 rounded-full shrink-0"
+                  style={{ backgroundColor: currentPlayer?.color }}
+                />
+                <span className="text-xs font-bold text-white truncate max-w-[110px]">
+                  {currentPlayer?.name}
+                </span>
+                <span className="font-mono text-xs font-bold text-[#D4AF37]">
+                  ${currentPlayer?.cash}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs font-mono tabular-nums">
+                <Dices className="w-3.5 h-3.5 text-[#D4AF37]" />
                 <span>
                   {gameState.dice[0]}+{gameState.dice[1]}=
                   {gameState.dice[0] + gameState.dice[1]}
                 </span>
               </div>
 
-              {/* Visual Countdown Timer in Control Dock */}
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#0F0C0A] border border-white/10">
-                <Clock
-                  className={`w-3.5 h-3.5 ${
-                    remainingSeconds !== null && remainingSeconds <= 10
-                      ? 'text-red-400'
-                      : 'text-[#D4AF37]'
-                  }`}
-                />
-                {gameState.turnTimeLimitSeconds > 0 &&
-                remainingSeconds !== null ? (
-                  <div className="flex flex-col min-w-[68px]">
-                    <div className="flex items-center justify-between text-[11px] font-mono font-bold tabular-nums">
-                      <span
-                        className={
-                          remainingSeconds <= 10
-                            ? 'text-red-400'
-                            : remainingSeconds <= 20
-                            ? 'text-amber-300'
-                            : 'text-[#FAF6F0]'
-                        }
-                      >
-                        {remainingSeconds}s
-                        {remainingSeconds <= 10 ? ' !' : ''}
-                      </span>
-                      <button
-                        onClick={() => {
-                          const cycle = [60, 30, 90, 0];
-                          const next =
-                            cycle[
-                              (cycle.indexOf(gameState.turnTimeLimitSeconds) +
-                                1) %
-                                cycle.length
-                            ] ?? 60;
-                          setDraftTurnLimit(next);
-                          dispatchAction({
-                            type: 'SET_TURN_TIME_LIMIT',
-                            seconds: next,
-                          });
-                        }}
-                        className="text-[10px] text-stone-400 hover:text-[#D4AF37] ml-1"
-                        title="Click to cycle Turn Timer (60s / 30s / 90s / Off)"
-                      >
-                        /{gameState.turnTimeLimitSeconds}s
-                      </button>
-                    </div>
-                    <div className="w-full h-1 bg-stone-800 rounded-full overflow-hidden mt-0.5">
-                      <div
-                        className={`h-full transition-all duration-200 ${
-                          remainingSeconds <= 10
-                            ? 'bg-red-500'
-                            : remainingSeconds <= 20
-                            ? 'bg-amber-400'
-                            : 'bg-[#D4AF37]'
-                        }`}
-                        style={{ width: `${timerProgressPct}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setDraftTurnLimit(60);
-                      dispatchAction({
-                        type: 'SET_TURN_TIME_LIMIT',
-                        seconds: 60,
-                      });
-                    }}
-                    className="text-[11px] font-mono text-stone-400 hover:text-[#D4AF37]"
-                    title="Enable 60s Turn Timer"
+              {gameState.turnTimeLimitSeconds > 0 &&
+                remainingSeconds !== null && (
+                  <div
+                    className={`flex items-center gap-1 px-2 py-1 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs font-mono font-bold tabular-nums ${
+                      remainingSeconds <= 10 ? 'text-red-400' : 'text-stone-300'
+                    }`}
                   >
-                    Timer: Off
-                  </button>
+                    <Clock className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    <span>{remainingSeconds}s</span>
+                  </div>
                 )}
-              </div>
+            </div>
 
+            {/* Right: Primary Turn CTA Buttons */}
+            <div className="flex items-center gap-2">
               {gameState.status === 'GAME_OVER' ? (
                 <button
                   onClick={() => setActiveModal('LOBBY')}
-                  className="px-4 py-2 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-bold"
+                  className="px-4 py-2 rounded-xl bg-[#D4AF37] text-[#0F0C0A] text-xs font-extrabold cursor-pointer"
                 >
                   Match Complete · Play Again
                 </button>
@@ -4793,32 +5591,19 @@ export default function MonopolyApp() {
                     <>
                       <button
                         onClick={() => dispatchAction({ type: 'ROLL_DICE' })}
-                        className="px-3.5 py-2 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-bold hover:bg-[#e5c247] transition-colors whitespace-nowrap"
+                        className="px-5 py-2 rounded-xl bg-[#D4AF37] text-[#0F0C0A] text-xs font-extrabold hover:bg-[#e5c247] transition-colors whitespace-nowrap cursor-pointer"
                       >
-                        Roll Dice ({currentPlayer?.name.split(' ')[0]})
+                        Roll Dice
                       </button>
-                      {currentPlayer?.inJail && (
-                        <>
-                          <button
-                            onClick={() =>
-                              dispatchAction({ type: 'PAY_JAIL_BAIL' })
-                            }
-                            disabled={currentPlayer.cash < 50}
-                            className="px-3 py-2 rounded-lg bg-stone-800 text-xs font-semibold text-stone-200 hover:bg-stone-700 disabled:opacity-40 whitespace-nowrap"
-                          >
-                            Bail $50
-                          </button>
-                          {currentPlayer.getOutOfJailCards > 0 && (
-                            <button
-                              onClick={() =>
-                                dispatchAction({ type: 'USE_JAIL_CARD' })
-                              }
-                              className="px-3 py-2 rounded-lg bg-emerald-800 text-xs font-semibold text-white whitespace-nowrap"
-                            >
-                              Use Pass
-                            </button>
-                          )}
-                        </>
+                      {currentPlayer?.inJail && currentPlayer.cash >= 50 && (
+                        <button
+                          onClick={() =>
+                            dispatchAction({ type: 'PAY_JAIL_BAIL' })
+                          }
+                          className="px-3 py-2 rounded-xl bg-stone-800 text-xs font-semibold text-stone-200 hover:bg-stone-700 whitespace-nowrap cursor-pointer"
+                        >
+                          Bail $50
+                        </button>
                       )}
                     </>
                   )}
@@ -4828,7 +5613,7 @@ export default function MonopolyApp() {
                       <button
                         onClick={() => dispatchAction({ type: 'BUY_PROPERTY' })}
                         disabled={currentPlayer.cash < currentEffectivePrice}
-                        className="px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 disabled:opacity-40 transition-colors whitespace-nowrap"
+                        className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-extrabold hover:bg-emerald-500 disabled:opacity-40 transition-colors whitespace-nowrap cursor-pointer"
                       >
                         Buy {currentTile.shortName} (${currentEffectivePrice})
                       </button>
@@ -4836,7 +5621,7 @@ export default function MonopolyApp() {
                         onClick={() =>
                           dispatchAction({ type: 'DECLINE_PROPERTY' })
                         }
-                        className="px-3 py-2 rounded-lg bg-stone-800 border border-[#D4AF37]/40 text-[#D4AF37] text-xs font-semibold hover:bg-stone-700 transition-colors whitespace-nowrap"
+                        className="px-3 py-2 rounded-xl bg-stone-800 border border-[#D4AF37]/40 text-[#D4AF37] text-xs font-semibold hover:bg-stone-700 transition-colors whitespace-nowrap cursor-pointer"
                       >
                         Auction
                       </button>
@@ -4846,7 +5631,7 @@ export default function MonopolyApp() {
                   {gameState.phase === 'END_TURN' && (
                     <button
                       onClick={() => dispatchAction({ type: 'END_TURN' })}
-                      className="px-3.5 py-2 rounded-lg bg-[#D4AF37] text-[#0F0C0A] text-xs font-bold hover:bg-[#e5c247] transition-colors whitespace-nowrap"
+                      className="px-5 py-2 rounded-xl bg-[#D4AF37] text-[#0F0C0A] text-xs font-extrabold hover:bg-[#e5c247] transition-colors whitespace-nowrap cursor-pointer"
                     >
                       {gameState.lastRollWasDoubles
                         ? 'Roll Again (Doubles!)'
@@ -4855,201 +5640,24 @@ export default function MonopolyApp() {
                   )}
                 </>
               ) : (
-                <div className="text-xs text-stone-300 px-1.5">
-                  Waiting for{' '}
+                <div className="text-xs text-stone-300 px-2">
                   <strong className="text-[#D4AF37]">
                     {currentPlayer?.name}
-                  </strong>
-                  ...
-                </div>
-              )}
-
-              {/* Quick Inspect Current Tile Deed & Google Search */}
-              <button
-                onClick={() => {
-                  setSelectedTileIndex(currentPlayer?.position || 0);
-                  setActiveModal('DEED');
-                }}
-                className="px-2.5 py-2 rounded-lg bg-[#0F0C0A] border border-white/10 text-xs text-stone-200 hover:border-[#D4AF37]/50 transition-colors flex items-center gap-1.5 whitespace-nowrap"
-              >
-                <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
-                <span>Inspect {currentTile.shortName}</span>
-              </button>
-
-              {/* Quick Build on Selected Tile via Click or 'B' Hotkey */}
-              {activeControllablePlayer &&
-                !activeControllablePlayer.isBot &&
-                canBuildHouseOnTile(
-                  gameState,
-                  activeControllablePlayer.id,
-                  selectedTile.index
-                ).allowed && (
-                  <button
-                    onClick={() =>
-                      dispatchAction({
-                        type: 'BUILD_HOUSE',
-                        playerId: activeControllablePlayer.id,
-                        tileIndex: selectedTile.index,
-                      })
-                    }
-                    className="px-2.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
-                    title="Press 'B' on your keyboard to build on the currently selected property"
-                  >
-                    <span className="px-1 py-0.2 rounded bg-black/40 font-mono text-[10px] text-[#D4AF37]">
-                      B
-                    </span>
-                    <span>
-                      Build {selectedTile.shortName} ($
-                      {selectedEffectiveHouseCost})
-                    </span>
-                  </button>
-                )}
-
-              {hotkeyFeedback && (
-                <div
-                  className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap ${
-                    hotkeyFeedback.tone === 'success'
-                      ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
-                      : 'bg-amber-950/90 border-amber-500/50 text-amber-200'
-                  }`}
-                >
-                  {hotkeyFeedback.text}
-                </div>
-              )}
-            </div>
-
-            {/* Right: 2D Easy-Read Toggle + 3D Camera Presets + AI Host & Audio Controls */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {/* Dedicated 2D Crisp Board Toggle */}
-              <button
-                onClick={() =>
-                  setViewMode((prev) => (prev === '2D' ? '3D' : '2D'))
-                }
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap ${
-                  viewMode === '2D'
-                    ? 'bg-[#D4AF37] text-[#0F0C0A]'
-                    : 'bg-[#0F0C0A] text-[#D4AF37] border border-[#D4AF37]/50 hover:bg-[#D4AF37]/15'
-                }`}
-                title="Switch to 2D High-Contrast Board for effortless reading"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>{viewMode === '2D' ? '2D Active' : '2D Board'}</span>
-              </button>
-
-              {(
-                [
-                  ['OVERVIEW', '3D Angle'],
-                  ['TOP_DOWN', '3D Top-Down'],
-                  ['FOLLOW_TOKEN', 'Follow'],
-                ] as [CameraPreset, string][]
-              ).map(([preset, label]) => (
-                <button
-                  key={preset}
-                  onClick={() => {
-                    setViewMode('3D');
-                    setCameraPreset(preset);
-                  }}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors whitespace-nowrap ${
-                    viewMode === '3D' && cameraPreset === preset
-                      ? 'bg-[#D4AF37] text-[#0F0C0A] font-semibold'
-                      : 'bg-[#0F0C0A] text-stone-300 hover:text-white border border-white/10'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-
-              <button
-                onClick={() => setShowLiveVoice((v) => !v)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1 whitespace-nowrap ${
-                  showLiveVoice
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-[#0F0C0A] text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-[#D4AF37]/15'
-                }`}
-                title="Real-time voice conversation with AI Host (gemini-3.8-live)"
-              >
-                <Mic className="w-3.5 h-3.5" />
-                <span>Live Voice</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  const next = !sfxMuted;
-                  setSfxMuted(next);
-                  soundFX.muted = next;
-                  if (next && currentAudioRef.current) {
-                    currentAudioRef.current.pause();
-                  }
-                }}
-                className="p-1.5 rounded-lg bg-[#0F0C0A] border border-white/10 text-stone-300 hover:text-white"
-                aria-label={sfxMuted ? 'Unmute Audio' : 'Mute Audio'}
-              >
-                {sfxMuted ? (
-                  <VolumeX className="w-4 h-4 text-red-400" />
-                ) : (
-                  <Volume2 className="w-4 h-4 text-[#D4AF37]" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* Row 3: Compact AI Host Broadcast Ticker & Event Log Line */}
-          <div className="flex items-center justify-between gap-4 pt-1 border-t border-white/10 text-[11px] text-stone-300">
-            <div className="truncate">
-              {gameState.hostConfig.enabled ? (
-                <span>
-                  <strong className="text-[#D4AF37]">
-                    AI Host ({gameState.hostConfig.voiceName}):
                   </strong>{' '}
-                  {hostTranscript}
-                </span>
-              ) : (
-                <span>
-                  <strong className="text-stone-400">Board Log:</strong>{' '}
-                  {gameState.logs[0]?.text}
-                </span>
+                  in play...
+                </div>
               )}
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
+
               <button
-                onClick={() => {
-                  setPortfolioTab('TRADES');
-                  setActiveModal('PORTFOLIO');
-                }}
-                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap cursor-pointer"
+                onClick={() => setActiveModal('TRADE')}
+                className="px-3 py-2 rounded-xl bg-[#0F0C0A] border border-white/15 text-xs font-semibold text-stone-200 hover:border-[#D4AF37] cursor-pointer"
               >
-                Trade History ({(gameState.tradeHistory || []).length})
-              </button>
-              <span aria-hidden="true" className="text-white/15">
-                ·
-              </span>
-              <button
-                onClick={() => {
-                  setPortfolioTab('HISTORY');
-                  setActiveModal('PORTFOLIO');
-                }}
-                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap flex items-center gap-1 cursor-pointer"
-              >
-                <Clock className="w-3 h-3 text-[#D4AF37]" />
-                <span>
-                  Turn History ({Math.min(20, gameState.logs.length)})
-                </span>
-              </button>
-              <span aria-hidden="true" className="text-white/15">
-                ·
-              </span>
-              <button
-                onClick={() => setActiveModal('HOST')}
-                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap cursor-pointer"
-              >
-                {gameState.hostConfig.enabled
-                  ? `${gameState.hostConfig.gender} · Customize Host`
-                  : 'AI Host Off · Enable'}
+                Trade
               </button>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
     </main>
   );
 }

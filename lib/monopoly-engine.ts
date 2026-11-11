@@ -101,6 +101,7 @@ export interface TurnEventNotice {
   id: string;
   kind:
     | 'BUY_DECISION'
+    | 'PROPERTY_BOUGHT'
     | 'RENT_PAID'
     | 'TAX_PAID'
     | 'CARD_DRAWN'
@@ -1330,20 +1331,36 @@ export function applyGameAction(
 
       currentPlayer.cash -= effectivePrice;
       prop.ownerId = currentPlayer.id;
-      state.turnNotice = null;
       const completedMonopoly = ownsFullColorGroup(
         state,
         currentPlayer.id,
         tile.group
       );
-      addLog(
-        state,
-        completedMonopoly
-          ? `${currentPlayer.name} acquired ${tile.name} (${tile.city}) for $${effectivePrice} and completed the ${tile.group} Monopoly!`
-          : `${currentPlayer.name} purchased ${tile.name} (${tile.city}) for $${effectivePrice}.`,
-        'BUY',
-        true
-      );
+      const buyDesc = completedMonopoly
+        ? `${currentPlayer.name} acquired ${tile.name} (${tile.city}) for $${effectivePrice} and completed the ${tile.group} Monopoly!`
+        : `${currentPlayer.name} purchased ${tile.name} (${tile.city}) for $${effectivePrice}.`;
+
+      if (currentPlayer.isBot) {
+        state.turnNotice = {
+          id: `notice-buy-${Date.now()}`,
+          kind: 'PROPERTY_BOUGHT',
+          playerId: currentPlayer.id,
+          playerName: currentPlayer.name,
+          tileIndex: tile.index,
+          tileName: tile.name,
+          tileCity: tile.city,
+          tileColorHex: tile.colorHex,
+          title: `${tile.name} Acquired`,
+          subtitle: `${currentPlayer.name} · Purchased Title Deed`,
+          description: buyDesc,
+          amountDelta: -effectivePrice,
+          passedGoBonus: state.turnNotice?.passedGoBonus,
+        };
+      } else {
+        state.turnNotice = null;
+      }
+
+      addLog(state, buyDesc, 'BUY', true);
       state.phase = 'END_TURN';
       return state;
     }
