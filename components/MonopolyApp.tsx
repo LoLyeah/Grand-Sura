@@ -46,6 +46,7 @@ import {
   computeNextBotAction,
   createInitialGameRoom,
   DEFAULT_TURN_TIME_LIMIT_SECONDS,
+  GameLogEntry,
   GameMode,
   GameRoomState,
   getEffectiveHouseCost,
@@ -143,10 +144,21 @@ export default function MonopolyApp() {
   // UI & Viewport Controls
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [activeModal, setActiveModal] = useState<ActiveModalTab>('NONE');
+  const [portfolioTab, setPortfolioTab] = useState<'HOLDINGS' | 'HISTORY'>(
+    'HOLDINGS'
+  );
+  const [historyCategoryFilter, setHistoryCategoryFilter] = useState<
+    'ALL' | 'ROLL' | 'BUY' | 'RENT' | 'OTHER'
+  >('ALL');
   const [selectedTileIndex, setSelectedTileIndex] = useState<number>(1);
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
   const [diceRollTrigger, setDiceRollTrigger] = useState(0);
   const [sfxMuted, setSfxMuted] = useState(false);
+  const [hotkeyFeedback, setHotkeyFeedback] = useState<{
+    text: string;
+    tone: 'success' | 'warn';
+  } | null>(null);
+  const hotkeyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Turn-Time Limit Countdown Clock Tick
   const [clockTick, setClockTick] = useState<number>(() => Date.now());
@@ -650,6 +662,81 @@ export default function MonopolyApp() {
     gameState,
     selectedTile.index
   );
+
+  // Keyboard hotkey 'B' in 2D or 3D view: attempts to trigger BUILD_HOUSE on the currently selected property
+  useEffect(() => {
+    if (appPhase !== 'IN_GAME') return;
+    const onBuildHotkey = (e: KeyboardEvent) => {
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key.toLowerCase() !== 'b') return;
+
+      e.preventDefault();
+
+      // Determine the controllable human player for the selected tile
+      const tileProp = gameState.properties[selectedTile.index];
+      const tileOwner = tileProp?.ownerId
+        ? gameState.players.find((p) => p.id === tileProp.ownerId)
+        : null;
+      const candidatePlayer =
+        gameState.mode === 'LOCAL' && tileOwner && !tileOwner.isBot
+          ? tileOwner
+          : activeControllablePlayer;
+
+      if (!candidatePlayer || candidatePlayer.isBot) {
+        setHotkeyFeedback({
+          text: `[B] Wait for a human player's turn to develop ${selectedTile.shortName}`,
+          tone: 'warn',
+        });
+      } else {
+        const check = canBuildHouseOnTile(
+          gameState,
+          candidatePlayer.id,
+          selectedTile.index
+        );
+        if (check.allowed) {
+          const nextCount = (tileProp?.houses || 0) + 1;
+          const upgradeLabel =
+            nextCount === 5 ? 'Grand Hotel' : `Villa #${nextCount}`;
+          dispatchAction({
+            type: 'BUILD_HOUSE',
+            playerId: candidatePlayer.id,
+            tileIndex: selectedTile.index,
+          });
+          setHotkeyFeedback({
+            text: `[B] Constructed ${upgradeLabel} on ${selectedTile.shortName} (-$${selectedEffectiveHouseCost})`,
+            tone: 'success',
+          });
+        } else {
+          setHotkeyFeedback({
+            text: `[B] ${selectedTile.shortName}: ${
+              check.reason || 'Cannot build on this property'
+            }`,
+            tone: 'warn',
+          });
+        }
+      }
+
+      if (hotkeyTimerRef.current) {
+        clearTimeout(hotkeyTimerRef.current);
+      }
+      hotkeyTimerRef.current = setTimeout(() => {
+        setHotkeyFeedback(null);
+      }, 2800);
+    };
+
+    window.addEventListener('keydown', onBuildHotkey);
+    return () => window.removeEventListener('keydown', onBuildHotkey);
+  }, [
+    appPhase,
+    gameState,
+    selectedTile.index,
+    selectedTile.shortName,
+    selectedEffectiveHouseCost,
+    activeControllablePlayer,
+    dispatchAction,
+  ]);
 
   const timerProgressPct =
     gameState.turnTimeLimitSeconds > 0 && remainingSeconds !== null
@@ -2071,8 +2158,9 @@ export default function MonopolyApp() {
                                   ).allowed
                                 }
                                 className="flex-1 py-1.5 px-3 rounded bg-[#14100E] text-[#D4AF37] text-xs font-semibold disabled:opacity-40"
+                                title="Shortcut: Press 'B' anytime while this property is selected"
                               >
-                                Build (+${selectedEffectiveHouseCost})
+                                [B] Build (+${selectedEffectiveHouseCost})
                               </button>
                               <button
                                 onClick={() =>
@@ -2286,13 +2374,13 @@ export default function MonopolyApp() {
               </div>
             )}
 
-            {/* PORTFOLIO & BUILDING MANAGER */}
+            {/* PORTFOLIO, BUILDING MANAGER & TURN HISTORY */}
             {activeModal === 'PORTFOLIO' && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                   <div>
-                    <div className="text-xs text-[#D4AF37] font-medium flex items-center gap-3">
-                      <span>Sovereign Asset Ledger & Construction</span>
+                    <div className="text-xs text-[#D4AF37] font-medium flex flex-wrap items-center gap-3">
+                      <span>Sovereign Asset Ledger, Construction & Activity</span>
                       <button
                         onClick={() => setActiveModal('TRADE')}
                         className="px-2.5 py-0.5 rounded bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 hover:bg-[#D4AF37] hover:text-[#0F0C0A] transition-colors font-semibold"
@@ -2304,115 +2392,421 @@ export default function MonopolyApp() {
                       className="text-xl font-bold"
                       style={{ fontFamily: 'var(--font-fraunces), serif' }}
                     >
-                      Player Holdings & Villas ({activeBoardConfig.shortLabel})
+                      {portfolioTab === 'HOLDINGS'
+                        ? `Player Holdings & Villas (${activeBoardConfig.shortLabel})`
+                        : `Turn History · Last 20 Actions (${activeBoardConfig.shortLabel})`}
                     </h2>
                   </div>
-                  <button
-                    onClick={() => setActiveModal('NONE')}
-                    className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 p-1 rounded-lg bg-[#0F0C0A] border border-white/10">
+                      <button
+                        onClick={() => setPortfolioTab('HOLDINGS')}
+                        className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                          portfolioTab === 'HOLDINGS'
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'text-stone-300 hover:text-white'
+                        }`}
+                      >
+                        Holdings & Villas
+                      </button>
+                      <button
+                        onClick={() => setPortfolioTab('HISTORY')}
+                        className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                          portfolioTab === 'HISTORY'
+                            ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                            : 'text-stone-300 hover:text-white'
+                        }`}
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>Turn History</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                            portfolioTab === 'HISTORY'
+                              ? 'bg-[#0F0C0A]/20 text-[#0F0C0A]'
+                              : 'bg-white/10 text-[#D4AF37]'
+                          }`}
+                        >
+                          {Math.min(20, gameState.logs.length)}
+                        </span>
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('NONE')}
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {gameState.players.map((p) => {
-                    const owned = Object.values(gameState.properties).filter(
-                      (pr) => pr.ownerId === p.id
-                    );
-                    return (
-                      <div
-                        key={p.id}
-                        className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2.5"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
+                {portfolioTab === 'HOLDINGS' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {gameState.players.map((p) => {
+                      const owned = Object.values(gameState.properties).filter(
+                        (pr) => pr.ownerId === p.id
+                      );
+                      return (
+                        <div
+                          key={p.id}
+                          className="p-4 rounded-xl bg-[#0F0C0A] border border-white/10 space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="w-3 h-3 rounded-sm"
+                                style={{ backgroundColor: p.color }}
+                              />
+                              <span className="font-bold text-sm">{p.name}</span>
+                              {p.bankrupt && (
+                                <span className="px-1.5 py-0.5 rounded bg-red-950/80 border border-red-500/40 text-[10px] font-bold text-red-300">
+                                  BANKRUPT
+                                </span>
+                              )}
+                            </div>
                             <span
-                              className="w-3 h-3 rounded-sm"
-                              style={{ backgroundColor: p.color }}
-                            />
-                            <span className="font-bold text-sm">{p.name}</span>
+                              className="text-sm font-bold text-[#D4AF37] tabular-nums"
+                              style={{
+                                fontFamily: 'var(--font-mono), monospace',
+                              }}
+                            >
+                              ${p.cash}
+                            </span>
                           </div>
-                          <span
-                            className="text-sm font-bold text-[#D4AF37] tabular-nums"
-                            style={{ fontFamily: 'var(--font-mono), monospace' }}
-                          >
-                            ${p.cash}
+                          <div className="text-xs text-stone-400">
+                            Position: {activeTiles[p.position]?.name} ·{' '}
+                            {owned.length} Deeds Owned
+                          </div>
+                          {owned.length > 0 ? (
+                            <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                              {owned.map((pr) => {
+                                const t = activeTiles[pr.tileIndex];
+                                if (!t) return null;
+                                const canBuild = canBuildHouseOnTile(
+                                  gameState,
+                                  p.id,
+                                  pr.tileIndex
+                                ).allowed;
+                                return (
+                                  <div
+                                    key={pr.tileIndex}
+                                    className="flex items-center justify-between text-xs p-1.5 rounded bg-[#14100E] border border-white/5"
+                                  >
+                                    <button
+                                      onClick={() => {
+                                        setSelectedTileIndex(pr.tileIndex);
+                                        setActiveModal('DEED');
+                                      }}
+                                      className="flex items-center gap-2 text-left hover:text-[#D4AF37]"
+                                    >
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                        style={{ backgroundColor: t.colorHex }}
+                                      />
+                                      <span className="truncate max-w-[150px]">
+                                        {t.shortName}
+                                      </span>
+                                      {pr.houses > 0 && (
+                                        <span className="text-emerald-400 font-mono">
+                                          {pr.houses === 5
+                                            ? 'HOTEL'
+                                            : `${pr.houses}V`}
+                                        </span>
+                                      )}
+                                      {pr.mortgaged && (
+                                        <span className="text-red-400">
+                                          MORTGAGED
+                                        </span>
+                                      )}
+                                    </button>
+                                    {!p.isBot && canBuild && (
+                                      <button
+                                        onClick={() =>
+                                          dispatchAction({
+                                            type: 'BUILD_HOUSE',
+                                            playerId: p.id,
+                                            tileIndex: pr.tileIndex,
+                                          })
+                                        }
+                                        className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-semibold text-[11px]"
+                                      >
+                                        +Build
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-stone-500 italic">
+                              No landmarks acquired yet.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* TURN HISTORY VIEW (LAST 20 ACTIONS) */
+                  (() => {
+                    const last20Logs = gameState.logs.slice(0, 20);
+                    const rollCount = last20Logs.filter(
+                      (l) => l.type === 'ROLL'
+                    ).length;
+                    const buyCount = last20Logs.filter(
+                      (l) =>
+                        l.type === 'BUY' ||
+                        l.type === 'BUILD' ||
+                        l.type === 'AUCTION'
+                    ).length;
+                    const rentCount = last20Logs.filter(
+                      (l) => l.type === 'RENT'
+                    ).length;
+                    const otherCount =
+                      last20Logs.length - rollCount - buyCount - rentCount;
+
+                    const filteredLogs = last20Logs.filter((entry) => {
+                      if (historyCategoryFilter === 'ALL') return true;
+                      if (historyCategoryFilter === 'ROLL')
+                        return entry.type === 'ROLL';
+                      if (historyCategoryFilter === 'BUY')
+                        return (
+                          entry.type === 'BUY' ||
+                          entry.type === 'BUILD' ||
+                          entry.type === 'AUCTION'
+                        );
+                      if (historyCategoryFilter === 'RENT')
+                        return entry.type === 'RENT';
+                      return (
+                        entry.type !== 'ROLL' &&
+                        entry.type !== 'BUY' &&
+                        entry.type !== 'BUILD' &&
+                        entry.type !== 'AUCTION' &&
+                        entry.type !== 'RENT'
+                      );
+                    });
+
+                    const getBadgeMeta = (type: GameLogEntry['type']) => {
+                      switch (type) {
+                        case 'ROLL':
+                          return {
+                            label: 'DICE ROLL',
+                            cls: 'bg-sky-950/90 text-sky-300 border-sky-500/40',
+                          };
+                        case 'BUY':
+                          return {
+                            label: 'PURCHASE',
+                            cls: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40',
+                          };
+                        case 'BUILD':
+                          return {
+                            label: 'DEVELOPMENT',
+                            cls: 'bg-teal-950/90 text-teal-300 border-teal-500/40',
+                          };
+                        case 'AUCTION':
+                          return {
+                            label: 'AUCTION',
+                            cls: 'bg-amber-950/90 text-amber-300 border-amber-500/40',
+                          };
+                        case 'RENT':
+                          return {
+                            label: 'RENT / FEE',
+                            cls: 'bg-rose-950/90 text-rose-300 border-rose-500/40',
+                          };
+                        case 'CARD':
+                          return {
+                            label: 'DECREE CARD',
+                            cls: 'bg-purple-950/90 text-purple-300 border-purple-500/40',
+                          };
+                        case 'JAIL':
+                          return {
+                            label: 'DETENTION',
+                            cls: 'bg-orange-950/90 text-orange-300 border-orange-500/40',
+                          };
+                        case 'TRADE':
+                          return {
+                            label: 'TRADE DEAL',
+                            cls: 'bg-indigo-950/90 text-indigo-300 border-indigo-500/40',
+                          };
+                        case 'EVENT':
+                          return {
+                            label: 'MACRO EVENT',
+                            cls: 'bg-yellow-950/90 text-[#D4AF37] border-[#D4AF37]/50',
+                          };
+                        case 'BANKRUPT':
+                          return {
+                            label: 'BANKRUPTCY',
+                            cls: 'bg-red-950/90 text-red-300 border-red-500/50',
+                          };
+                        default:
+                          return {
+                            label: 'SYSTEM',
+                            cls: 'bg-stone-800 text-stone-300 border-white/15',
+                          };
+                      }
+                    };
+
+                    return (
+                      <div className="space-y-3">
+                        {/* Summary Metrics Strip for the Last 20 Actions */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
+                            <div>
+                              <div className="text-[10px] font-semibold text-stone-400">
+                                DICE ROLLS
+                              </div>
+                              <div className="text-base font-bold text-sky-300 font-mono">
+                                {rollCount}
+                              </div>
+                            </div>
+                            <Dices className="w-4 h-4 text-sky-400/70" />
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
+                            <div>
+                              <div className="text-[10px] font-semibold text-stone-400">
+                                DEEDS & BUILDS
+                              </div>
+                              <div className="text-base font-bold text-emerald-300 font-mono">
+                                {buyCount}
+                              </div>
+                            </div>
+                            <TrendingUp className="w-4 h-4 text-emerald-400/70" />
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
+                            <div>
+                              <div className="text-[10px] font-semibold text-stone-400">
+                                RENT PAYMENTS
+                              </div>
+                              <div className="text-base font-bold text-rose-300 font-mono">
+                                {rentCount}
+                              </div>
+                            </div>
+                            <TrendingDown className="w-4 h-4 text-rose-400/70" />
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-[#0F0C0A] border border-white/10 flex items-center justify-between">
+                            <div>
+                              <div className="text-[10px] font-semibold text-stone-400">
+                                CARDS & EVENTS
+                              </div>
+                              <div className="text-base font-bold text-[#D4AF37] font-mono">
+                                {otherCount}
+                              </div>
+                            </div>
+                            <Clock className="w-4 h-4 text-[#D4AF37]/70" />
+                          </div>
+                        </div>
+
+                        {/* Filter Bar */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {(
+                              [
+                                [
+                                  'ALL',
+                                  `All Last ${last20Logs.length} Actions`,
+                                ],
+                                ['ROLL', `Rolls (${rollCount})`],
+                                ['BUY', `Purchases & Builds (${buyCount})`],
+                                ['RENT', `Rent Payments (${rentCount})`],
+                                ['OTHER', `Cards & Events (${otherCount})`],
+                              ] as const
+                            ).map(([fKey, fLabel]) => (
+                              <button
+                                key={fKey}
+                                onClick={() => setHistoryCategoryFilter(fKey)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                  historyCategoryFilter === fKey
+                                    ? 'bg-[#D4AF37] text-[#0F0C0A]'
+                                    : 'bg-[#0F0C0A] text-stone-300 border border-white/10 hover:border-white/30'
+                                }`}
+                              >
+                                {fLabel}
+                              </button>
+                            ))}
+                          </div>
+                          <span className="text-[11px] font-mono text-stone-400">
+                            Completed Turns: {gameState.completedTurns}
                           </span>
                         </div>
-                        <div className="text-xs text-stone-400">
-                          Position: {activeTiles[p.position]?.name} ·{' '}
-                          {owned.length} Deeds Owned
-                        </div>
-                        {owned.length > 0 ? (
-                          <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                            {owned.map((pr) => {
-                              const t = activeTiles[pr.tileIndex];
-                              if (!t) return null;
-                              const canBuild = canBuildHouseOnTile(
-                                gameState,
-                                p.id,
-                                pr.tileIndex
-                              ).allowed;
+
+                        {/* Scrollable List of the Last 20 Actions */}
+                        <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+                          {filteredLogs.length === 0 ? (
+                            <div className="p-6 rounded-xl bg-[#0F0C0A] border border-white/10 text-center text-xs text-stone-400 italic">
+                              No matching actions recorded in the last 20 turns
+                              yet.
+                            </div>
+                          ) : (
+                            filteredLogs.map((entry) => {
+                              const overallIdx = last20Logs.findIndex(
+                                (item) => item.id === entry.id
+                              );
+                              const badge = getBadgeMeta(entry.type);
+                              const matchedPlayer = gameState.players.find(
+                                (p) => entry.text.startsWith(p.name)
+                              );
+                              const formattedTime = new Date(
+                                entry.timestamp
+                              ).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              });
+
                               return (
                                 <div
-                                  key={pr.tileIndex}
-                                  className="flex items-center justify-between text-xs p-1.5 rounded bg-[#14100E] border border-white/5"
+                                  key={entry.id}
+                                  className={`p-3 rounded-xl border transition-colors flex items-start justify-between gap-3 ${
+                                    overallIdx === 0
+                                      ? 'bg-[#1B1510] border-[#D4AF37]/50 shadow-sm'
+                                      : 'bg-[#0F0C0A] border-white/10'
+                                  }`}
                                 >
-                                  <button
-                                    onClick={() => {
-                                      setSelectedTileIndex(pr.tileIndex);
-                                      setActiveModal('DEED');
-                                    }}
-                                    className="flex items-center gap-2 text-left hover:text-[#D4AF37]"
-                                  >
-                                    <span
-                                      className="w-2.5 h-2.5 rounded-xs shrink-0"
-                                      style={{ backgroundColor: t.colorHex }}
-                                    />
-                                    <span className="truncate max-w-[150px]">
-                                      {t.shortName}
-                                    </span>
-                                    {pr.houses > 0 && (
-                                      <span className="text-emerald-400 font-mono">
-                                        {pr.houses === 5
-                                          ? 'HOTEL'
-                                          : `${pr.houses}V`}
+                                  <div className="flex items-start gap-2.5 min-w-0">
+                                    <div className="flex flex-col items-center gap-1 shrink-0 pt-0.5">
+                                      <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] font-mono text-stone-400">
+                                        #{overallIdx + 1}
                                       </span>
-                                    )}
-                                    {pr.mortgaged && (
-                                      <span className="text-red-400">
-                                        MORTGAGED
-                                      </span>
-                                    )}
-                                  </button>
-                                  {!p.isBot && canBuild && (
-                                    <button
-                                      onClick={() =>
-                                        dispatchAction({
-                                          type: 'BUILD_HOUSE',
-                                          playerId: p.id,
-                                          tileIndex: pr.tileIndex,
-                                        })
-                                      }
-                                      className="px-2 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] font-semibold text-[11px]"
-                                    >
-                                      +Build
-                                    </button>
-                                  )}
+                                      {matchedPlayer && (
+                                        <span
+                                          className="w-2.5 h-2.5 rounded-xs"
+                                          style={{
+                                            backgroundColor:
+                                              matchedPlayer.color,
+                                          }}
+                                          title={matchedPlayer.name}
+                                        />
+                                      )}
+                                    </div>
+                                    <div className="space-y-1 min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span
+                                          className={`px-2 py-0.5 rounded border text-[10px] font-bold tracking-wide ${badge.cls}`}
+                                        >
+                                          {badge.label}
+                                        </span>
+                                        {overallIdx === 0 && (
+                                          <span className="px-1.5 py-0.5 rounded bg-[#D4AF37] text-[#0F0C0A] text-[10px] font-extrabold">
+                                            LATEST
+                                          </span>
+                                        )}
+                                        <span className="text-[11px] font-mono text-stone-400">
+                                          {formattedTime}
+                                        </span>
+                                      </div>
+                                      <p className="text-xs text-stone-100 leading-relaxed break-words">
+                                        {entry.text}
+                                      </p>
+                                    </div>
+                                  </div>
                                 </div>
                               );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="text-xs text-stone-500 italic">
-                            No landmarks acquired yet.
-                          </div>
-                        )}
+                            })
+                          )}
+                        </div>
                       </div>
                     );
-                  })}
-                </div>
+                  })()
+                )}
               </div>
             )}
 
@@ -3616,6 +4010,47 @@ export default function MonopolyApp() {
                 <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
                 <span>Inspect {currentTile.shortName}</span>
               </button>
+
+              {/* Quick Build on Selected Tile via Click or 'B' Hotkey */}
+              {activeControllablePlayer &&
+                !activeControllablePlayer.isBot &&
+                canBuildHouseOnTile(
+                  gameState,
+                  activeControllablePlayer.id,
+                  selectedTile.index
+                ).allowed && (
+                  <button
+                    onClick={() =>
+                      dispatchAction({
+                        type: 'BUILD_HOUSE',
+                        playerId: activeControllablePlayer.id,
+                        tileIndex: selectedTile.index,
+                      })
+                    }
+                    className="px-2.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                    title="Press 'B' on your keyboard to build on the currently selected property"
+                  >
+                    <span className="px-1 py-0.2 rounded bg-black/40 font-mono text-[10px] text-[#D4AF37]">
+                      B
+                    </span>
+                    <span>
+                      Build {selectedTile.shortName} ($
+                      {selectedEffectiveHouseCost})
+                    </span>
+                  </button>
+                )}
+
+              {hotkeyFeedback && (
+                <div
+                  className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap ${
+                    hotkeyFeedback.tone === 'success'
+                      ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+                      : 'bg-amber-950/90 border-amber-500/50 text-amber-200'
+                  }`}
+                >
+                  {hotkeyFeedback.text}
+                </div>
+              )}
             </div>
 
             {/* Right: 2D Easy-Read Toggle + 3D Camera Presets + AI Host & Audio Controls */}
@@ -3710,14 +4145,29 @@ export default function MonopolyApp() {
                 </span>
               )}
             </div>
-            <button
-              onClick={() => setActiveModal('HOST')}
-              className="text-stone-400 hover:text-[#D4AF37] shrink-0 whitespace-nowrap"
-            >
-              {gameState.hostConfig.enabled
-                ? `${gameState.hostConfig.gender} · Customize Host`
-                : 'AI Host Off · Enable'}
-            </button>
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={() => {
+                  setPortfolioTab('HISTORY');
+                  setActiveModal('PORTFOLIO');
+                }}
+                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap flex items-center gap-1"
+              >
+                <Clock className="w-3 h-3 text-[#D4AF37]" />
+                <span>
+                  Turn History ({Math.min(20, gameState.logs.length)})
+                </span>
+              </button>
+              <span className="text-white/15">·</span>
+              <button
+                onClick={() => setActiveModal('HOST')}
+                className="text-stone-400 hover:text-[#D4AF37] whitespace-nowrap"
+              >
+                {gameState.hostConfig.enabled
+                  ? `${gameState.hostConfig.gender} · Customize Host`
+                  : 'AI Host Off · Enable'}
+              </button>
+            </div>
           </div>
         </div>
       </section>

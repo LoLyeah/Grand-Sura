@@ -330,7 +330,6 @@ export function canBuildHouseOnTile(
   tileIndex: number
 ): { allowed: boolean; reason?: string } {
   const tiles = getBoardTiles(state.boardSize);
-  const groupMap = getGroupTileIndices(state.boardSize);
   const tile = tiles[tileIndex];
   const prop = state.properties[tileIndex];
   const player = state.players.find((p) => p.id === playerId);
@@ -351,29 +350,6 @@ export function canBuildHouseOnTile(
       allowed: false,
       reason: `Insufficient cash ($${effectiveCost} required)`,
     };
-
-  const groupIndices = groupMap[tile.group];
-  const ownsAll = groupIndices.every(
-    (idx) =>
-      state.properties[idx]?.ownerId === playerId &&
-      !state.properties[idx]?.mortgaged
-  );
-  if (!ownsAll) {
-    return {
-      allowed: false,
-      reason: 'Must own all unmortgaged properties in this color group',
-    };
-  }
-
-  const minHousesInGroup = Math.min(
-    ...groupIndices.map((idx) => state.properties[idx]?.houses ?? 0)
-  );
-  if (prop.houses > minHousesInGroup) {
-    return {
-      allowed: false,
-      reason: 'Must build evenly across the color group',
-    };
-  }
 
   return { allowed: true };
 }
@@ -1796,11 +1772,16 @@ export function computeNextBotAction(
 
   if (state.phase === 'END_TURN') {
     for (const prop of Object.values(state.properties)) {
-      if (prop.ownerId === currentPlayer.id) {
+      const tile = tiles[prop.tileIndex];
+      if (
+        prop.ownerId === currentPlayer.id &&
+        tile &&
+        ownsFullColorGroup(state, currentPlayer.id, tile.group)
+      ) {
         const effectiveCost = getEffectiveHouseCost(state, prop.tileIndex);
         if (
           effectiveCost > 0 &&
-          currentPlayer.cash - effectiveCost >= 180 &&
+          currentPlayer.cash - effectiveCost >= 250 &&
           canBuildHouseOnTile(state, currentPlayer.id, prop.tileIndex).allowed
         ) {
           return {

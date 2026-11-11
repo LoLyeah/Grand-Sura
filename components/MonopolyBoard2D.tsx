@@ -139,6 +139,22 @@ export default function MonopolyBoard2D({
             <Users className="w-3.5 h-3.5" />
             {boardConfig.recommendedPlayers}
           </span>
+          <span
+            className="px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-500/35 text-emerald-300 font-semibold flex items-center gap-1.5"
+            title="Tiles with at least one active player are highlighted with a warm gold glow and player beacon"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>
+              Occupied Spaces:{' '}
+              {
+                new Set(
+                  gameState.players
+                    .filter((p) => !p.bankrupt)
+                    .map((p) => p.position)
+                ).size
+              }
+            </span>
+          </span>
         </div>
 
         {/* Quick Board Size Selector with Recommended Player Counts */}
@@ -237,6 +253,13 @@ export default function MonopolyBoard2D({
           const occupants = gameState.players.filter(
             (p) => !p.bankrupt && p.position === tile.index
           );
+          const isOccupied = occupants.length > 0;
+          const hasActiveTurnPlayer = occupants.some(
+            (p) => p.id === currentPlayer?.id
+          );
+          const primaryOccupantColor =
+            occupants.find((p) => p.id === currentPlayer?.id)?.color ||
+            occupants[0]?.color;
           const isSelected = selectedTileIndex === tile.index;
           const isHovered = hoveredTileIndex === tile.index;
           const effectivePrice = getEffectivePropertyPrice(
@@ -267,16 +290,40 @@ export default function MonopolyBoard2D({
               }}
               className={`relative flex flex-col justify-between rounded-lg overflow-hidden transition-all cursor-pointer text-left p-1 md:p-1.5 border ${
                 isCorner
-                  ? 'bg-[#17120E] text-[#FAF6F0]'
+                  ? isOccupied
+                    ? 'bg-[#231B13] text-[#FAF6F0]'
+                    : 'bg-[#17120E] text-[#FAF6F0]'
                   : prop?.mortgaged
                   ? 'bg-stone-300 text-stone-900'
+                  : isOccupied
+                  ? 'bg-[#FFF5D6] text-[#14100E]'
                   : 'bg-[#FAF6F0] text-[#14100E]'
               } ${
                 isSelected || isHovered
                   ? 'ring-2 ring-[#D4AF37] border-[#D4AF37] z-10 scale-[1.02] shadow-lg'
+                  : isOccupied
+                  ? hasActiveTurnPlayer
+                    ? 'border-[#D4AF37] ring-1 ring-[#D4AF37]/85 shadow-[0_0_14px_rgba(212,175,55,0.35)] z-[5]'
+                    : 'border-[#D4AF37]/85 ring-1 ring-[#D4AF37]/55 shadow-[0_0_10px_rgba(212,175,55,0.22)] z-[5]'
                   : 'border-stone-800/80 hover:border-[#D4AF37]'
               }`}
             >
+              {/* Subtle Left/Top Occupancy Beacon Strip when Occupied */}
+              {isOccupied && (
+                <div
+                  className="w-full h-1 rounded-full mb-0.5 shrink-0 flex items-center overflow-hidden"
+                  title={`Occupied by: ${occupants.map((p) => p.name).join(', ')}`}
+                >
+                  {occupants.map((occ) => (
+                    <span
+                      key={occ.id}
+                      className="h-full flex-1"
+                      style={{ backgroundColor: occ.color }}
+                    />
+                  ))}
+                </div>
+              )}
+
               {/* Top Color Header Bar + City Name + Space Index */}
               <div
                 className="w-full rounded-xs px-1 py-0.5 flex items-center justify-between gap-1 shrink-0"
@@ -298,9 +345,27 @@ export default function MonopolyBoard2D({
                 >
                   {tile.city}
                 </span>
-                <span className="text-[9px] font-mono font-bold text-white/90 bg-black/55 px-1 rounded-xs shrink-0">
-                  #{tile.index}
-                </span>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {isOccupied && (
+                    <span
+                      className="inline-flex items-center gap-0.5 px-1 rounded-xs text-[8px] font-extrabold bg-[#D4AF37] text-[#0F0C0A]"
+                      title={`${occupants.length} player(s) on this tile: ${occupants
+                        .map((o) => o.name)
+                        .join(', ')}`}
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full"
+                        style={{
+                          backgroundColor: primaryOccupantColor || '#0F0C0A',
+                        }}
+                      />
+                      {occupants.length}P
+                    </span>
+                  )}
+                  <span className="text-[9px] font-mono font-bold text-white/90 bg-black/55 px-1 rounded-xs">
+                    #{tile.index}
+                  </span>
+                </div>
               </div>
 
               {/* Center Upright Landmark Name (Clearly Readable!) */}
@@ -583,9 +648,10 @@ export default function MonopolyBoard2D({
                         })
                       }
                       className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 flex items-center gap-1"
+                      title="Shortcut: Press 'B' while a property is selected to build"
                     >
                       <Building2 className="w-3.5 h-3.5" />
-                      <span>Build (+${focusedEffectiveHouseCost})</span>
+                      <span>[B] Build (+${focusedEffectiveHouseCost})</span>
                     </button>
                   )}
                   <button
